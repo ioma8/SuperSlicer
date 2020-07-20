@@ -1,5 +1,5 @@
 
-# SuperSlicer
+# SuperSlicer - merged with PrusaSlicer-master
 
 **A PrusaSlicer fork (which is a slic3r fork)** (previously Slic3r++)
 
