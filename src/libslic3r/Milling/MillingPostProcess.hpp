@@ -2,7 +2,6 @@
 #define slic3r_MillingPostProcess_hpp_
 
 #include "../libslic3r.h"
-#include "../ExPolygonCollection.hpp"
 #include "../Polygon.hpp"
 #include "../Layer.hpp"
 #include "../PrintConfig.hpp"
@@ -14,19 +13,19 @@ namespace Slic3r {
 class MillingPostProcess {
 public:
     // Inputs:
-    const SurfaceCollection     *slices;
+    const ExPolygons            *slices;
     const ExPolygons            *lower_slices;
-    const PrintRegionConfig     *config;
-    const PrintObjectConfig     *object_config;
-    const PrintConfig           *print_config;
+    const PrintRegionConfig     &config;
+    const PrintObjectConfig     &object_config;
+    const PrintConfig           &print_config;
     
     MillingPostProcess(
         // Input:
-        const SurfaceCollection*    slices,
+        const ExPolygons*           slices,
         const ExPolygons*           lower_slices,
-        const PrintRegionConfig*    config,
-        const PrintObjectConfig*    object_config,
-        const PrintConfig*          print_config)
+        const PrintRegionConfig&    config,
+        const PrintObjectConfig&    object_config,
+        const PrintConfig&          print_config)
         : slices(slices), lower_slices(lower_slices),
             config(config), object_config(object_config), print_config(print_config)
         {};

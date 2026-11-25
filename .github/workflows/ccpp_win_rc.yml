@@ -1,0 +1,31 @@
+name: C/C++ Release candidate windows x64
+
+# Standalone, never signed diagnostic of the Windows RC build. Branch rc uses
+# ci_rc.yml and version tags use release_rc.yml; both call the same two workers.
+on:
+  push:
+    branches:
+      - debug_win
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/windows_build.yml
+    with:
+      source_sha: ${{ github.sha }}
+      mode: rc
+
+  package:
+    needs: build
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/windows_package.yml
+    with:
+      artifact_id: ${{ needs.build.outputs.artifact_id }}
+      source_sha: ${{ github.sha }}
+      mode: rc
+      signing: none

@@ -1,3 +1,11 @@
+///|/ Copyright (c) Prusa Research 2016 - 2023 Vojtěch Bubník @bubnikv, Lukáš Hejl @hejllukas, Lukáš Matěna @lukasmatena
+///|/ Copyright (c) SuperSlicer 2023 Remi Durand @supermerill
+///|/ Copyright (c) Slic3r 2013 - 2016 Alessandro Ranellucci @alranel
+///|/ Copyright (c) 2015 Maksim Derbasov @ntfshard
+///|/ Copyright (c) 2014 Petr Ledvina @ledvinap
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #include "ExtrusionEntityCollection.hpp"
 #include "ShortestPath.hpp"
 #include <algorithm>
@@ -6,9 +14,10 @@
 
 namespace Slic3r {
 
+#if 0
 void filter_by_extrusion_role_in_place(ExtrusionEntitiesPtr &extrusion_entities, ExtrusionRole role)
 {
-	if (role != erMixed) {
+	if (role != ExtrusionRole::Mixed) {
 		auto first  = extrusion_entities.begin();
 		auto last   = extrusion_entities.end();
         extrusion_entities.erase(
@@ -17,123 +26,173 @@ void filter_by_extrusion_role_in_place(ExtrusionEntitiesPtr &extrusion_entities,
             last);
 	}
 }
+#endif
 
 ExtrusionEntityCollection::ExtrusionEntityCollection(const ExtrusionPaths &paths)
-    : no_sort(false)
+    : m_no_sort(false), ExtrusionEntity(true)
 {
     this->append(paths);
 }
 
 ExtrusionEntityCollection& ExtrusionEntityCollection::operator= (const ExtrusionEntityCollection &other)
 {
-    this->entities      = other.entities;
-    for (size_t i = 0; i < this->entities.size(); ++i)
-        this->entities[i] = this->entities[i]->clone();
-    this->no_sort       = other.no_sort;
+    this->m_property = other.m_property ? other.m_property->clone() : nullptr;
+    this->m_no_sort = other.m_no_sort;
+    this->m_can_reverse = other.m_can_reverse;
+    this->m_id = other.m_id;
+    clear();
+    this->append(other.m_entities);
     return *this;
 }
 
 void ExtrusionEntityCollection::swap(ExtrusionEntityCollection &c)
 {
-    std::swap(this->entities, c.entities);
-    std::swap(this->no_sort, c.no_sort);
+    std::swap(this->m_entities, c.m_entities);
+    std::swap(this->m_no_sort, c.m_no_sort);
+    std::swap(this->m_can_reverse, c.m_can_reverse);
+    std::swap(this->m_id, c.m_id);
+}
+
+ExtrusionRole ExtrusionEntityCollection::role() const
+{
+    ExtrusionRole out{ ExtrusionRole::None };
+    for (const ExtrusionEntity *ee : m_entities) {
+        ExtrusionRole er = ee->role();
+        if (out == ExtrusionRole::None) {
+            out = er;
+        }else if (out != er) {
+            return ExtrusionRole::Mixed;
+        }
+    }
+    return out;
+}
+
+bool ExtrusionEntityCollection::has_role(ExtrusionRole test_role) const
+{
+    if (this->entities().empty())
+        return false;
+    for (const ExtrusionEntity *entity : this->entities())
+        if (entity->has_role(test_role)) {
+            return true;
+        }
+    return false;
 }
 
 void ExtrusionEntityCollection::clear()
 {
-	for (size_t i = 0; i < this->entities.size(); ++i)
-		delete this->entities[i];
-    this->entities.clear();
+	for (size_t i = 0; i < this->m_entities.size(); ++i)
+		delete this->m_entities[i];
+    this->m_entities.clear();
 }
 
 ExtrusionEntityCollection::operator ExtrusionPaths() const
 {
     ExtrusionPaths paths;
-    for (const ExtrusionEntity *ptr : this->entities) {
+    for (const ExtrusionEntity *ptr : this->entities()) {
         if (const ExtrusionPath *path = dynamic_cast<const ExtrusionPath*>(ptr))
             paths.push_back(*path);
     }
     return paths;
 }
 
-ExtrusionEntityCollection* ExtrusionEntityCollection::clone() const
-{
-    ExtrusionEntityCollection* coll = new ExtrusionEntityCollection(*this);
-    for (size_t i = 0; i < coll->entities.size(); ++i)
-        coll->entities[i] = this->entities[i]->clone();
-    return coll;
-}
-
 void ExtrusionEntityCollection::reverse()
 {
-    for (ExtrusionEntity *ptr : this->entities)
+    for (ExtrusionEntity *ptr : this->m_entities)
     {
         // Don't reverse it if it's a loop, as it doesn't change anything in terms of elements ordering
         // and caller might rely on winding order
-        if (!ptr->can_reverse())
+        if (ptr->can_reverse() && !ptr->is_loop())
             ptr->reverse();
     }
-    std::reverse(this->entities.begin(), this->entities.end());
+    std::reverse(this->m_entities.begin(), this->m_entities.end());
 }
 
 void ExtrusionEntityCollection::replace(size_t i, const ExtrusionEntity &entity)
 {
-    delete this->entities[i];
-    this->entities[i] = entity.clone();
+    delete this->m_entities[i];
+    this->m_entities[i] = entity.clone();
 }
 
 void ExtrusionEntityCollection::remove(size_t i)
 {
-    delete this->entities[i];
-    this->entities.erase(this->entities.begin() + i);
+    delete this->m_entities[i];
+    this->m_entities.erase(this->m_entities.begin() + i);
 }
 
-ExtrusionEntityCollection ExtrusionEntityCollection::chained_path_from(const ExtrusionEntitiesPtr& extrusion_entities, const Point &start_near, ExtrusionRole role)
-//ExtrusionEntityCollection ExtrusionEntityCollection::chained_path_from(const Point &start_near, ExtrusionRole role)
+// note: chained_path_from only this collection. You still need to chained_path_from the child collections.
+ExtrusionEntityReferences ExtrusionEntityCollection::chained_path_from(const Point &start_near)
 {
-    //ExtrusionEntityCollection out;
-    //if (this->no_sort) {
-    //    out = *this;
-    //} else {
-    //    if (role == erMixed)
-    //        out = *this;
-    //    else {
-    //        for (const ExtrusionEntity *ee : this->entities) {
-    //            if (role != erMixed) {
-    //                // The caller wants only paths with a specific extrusion role.
-    //                auto role2 = ee->role();
-    //                if (role != role2) {
-    //                    // This extrusion entity does not match the role asked.
-    //                    assert(role2 != erMixed);
-    //                    continue;
-    //                }
-    //            }
-    //            out.entities.emplace_back(ee->clone());
-    //        }
-    //    }
-    //    chain_and_reorder_extrusion_entities(out.entities, &start_near);
-    //}
-    //return out;
-    // Return a filtered copy of the collection.
-    ExtrusionEntityCollection out;
-    out.entities = filter_by_extrusion_role(extrusion_entities, role);
-    // Clone the extrusion entities.
-    for (auto &ptr : out.entities)
-        ptr = ptr->clone();
-    chain_and_reorder_extrusion_entities(out.entities, &start_near);
-    return out;
+    if (this->m_no_sort) {
+        ExtrusionEntityReferences result{};
+        bool need_reverse = false;
+        if (this->m_can_reverse) {
+            if (!m_entities.empty()) {
+                if (m_entities.front()->is_collection()) {
+                    assert(dynamic_cast<ExtrusionEntityCollection *>(m_entities.front()) != nullptr);
+                    ExtrusionEntityCollection *front_coll = static_cast<ExtrusionEntityCollection *>(
+                        m_entities.front());
+                    result = front_coll->chained_path_from(start_near);
+                    assert(!result.empty());
+                } else if (m_entities.front()->can_reverse() &&
+                           m_entities.front()->first_point().distance_to_square(start_near) >
+                               m_entities.front()->last_point().distance_to_square(start_near)) {
+                    result.emplace_back(*m_entities.front(), true);
+                } else {
+                    result.emplace_back(*m_entities.front(), false);
+                }
+            }
+            if (m_entities.size() > 1) {
+                if (m_entities.back()->is_collection()) {
+                    assert(dynamic_cast<ExtrusionEntityCollection *>(m_entities.front()) != nullptr);
+                    static_cast<ExtrusionEntityCollection *>(m_entities.back())->chained_path_from(start_near);
+                } else if (m_entities.back()->can_reverse() &&
+                           m_entities.back()->first_point().distance_to_square(start_near) >
+                               m_entities.back()->last_point().distance_to_square(start_near)) {
+                    result.emplace_back(*m_entities.back(), true);
+                } else {
+                    result.emplace_back(*m_entities.back(), false);
+                }
+                // can't sort myself, ask first and last thing to sort itself so the first point of each are the best ones
+
+                // now check if it's better for us to reverse
+                Point first_point = result.front().flipped() ? result.front().extrusion_entity().last_point() :
+                                                               result.front().extrusion_entity().first_point();
+                Point last_point = result.back().flipped() ? result.back().extrusion_entity().first_point() :
+                                                             result.back().extrusion_entity().last_point();
+                if (start_near.distance_to_square(first_point) > start_near.distance_to_square(last_point)) {
+                    // switch entities
+                    need_reverse = true;
+                    // this->reverse();
+                }
+            } else {
+                // only one child (useless collection)
+                need_reverse = result.front().flipped();
+            }
+            result.clear();
+        }
+        // now we are in our good order, update the internals to the final order
+        for (ExtrusionEntity *entity : m_entities) {
+            result.emplace_back(*entity, need_reverse);
+        }
+        if (need_reverse) {
+            std::reverse(result.begin(), result.end());
+        }
+        return result;
+    } else {
+        return chain_extrusion_references(this->m_entities, &start_near);
+    }
 }
 
 void ExtrusionEntityCollection::polygons_covered_by_width(Polygons &out, const float scaled_epsilon) const
 {
-    for (const ExtrusionEntity *entity : this->entities)
+    for (const ExtrusionEntity *entity : this->entities())
         entity->polygons_covered_by_width(out, scaled_epsilon);
 }
 
-void ExtrusionEntityCollection::polygons_covered_by_spacing(Polygons &out, const float scaled_epsilon) const
+void ExtrusionEntityCollection::polygons_covered_by_spacing(Polygons &out, const float spacing_ratio, const float scaled_epsilon) const
 {
-    for (const ExtrusionEntity *entity : this->entities)
-        entity->polygons_covered_by_spacing(out, scaled_epsilon);
+    for (const ExtrusionEntity *entity : this->entities())
+        entity->polygons_covered_by_spacing(out, spacing_ratio, scaled_epsilon);
 }
 
 // Recursively count paths and loops contained in this collection.
@@ -144,7 +203,7 @@ size_t ExtrusionEntityCollection::items_count() const
 
 void
 CountEntities::use(const ExtrusionEntityCollection &coll) {
-    for (const ExtrusionEntity* entity : coll.entities) {
+    for (const ExtrusionEntity* entity : coll.entities()) {
         entity->visit(*this);
     }
 }
@@ -158,37 +217,40 @@ ExtrusionEntityCollection ExtrusionEntityCollection::flatten(bool preserve_order
     return FlatenEntities(preserve_ordering).flatten(*this);
 
 }
-void
-FlatenEntities::use(const ExtrusionEntityCollection &coll) {
-    if (coll.no_sort && preserve_ordering) {
+
+void ExtrusionEntityCollection::flatten(bool preserve_ordering, ExtrusionEntityCollection& out) const
+{
+    if (!this->can_sort() && preserve_ordering && this->entities().size() > 1) {
+        out.append(this->flatten(preserve_ordering));
+    } else {
+        FlatenEntities flattener(preserve_ordering);
+        flattener.use(*this);
+        //tranfert owner of entities.
+        out.m_entities.insert(out.m_entities.begin(), flattener.get().entities().begin(), flattener.get().entities().end());
+        flattener.set().m_entities.clear();
+    }
+}
+
+void FlatenEntities::use(const ExtrusionEntityCollection &coll) {
+    if (coll.entities().size() == 1) {
+        // only one element, sort or reverse are meaningless.
+        coll.entities().front()->visit(*this);
+    } else if ((!coll.can_sort() || !this->to_fill.can_sort()) && preserve_ordering) {
         FlatenEntities unsortable(coll, preserve_ordering);
-        for (const ExtrusionEntity* entity : coll.entities) {
+        for (const ExtrusionEntity* entity : coll.entities()) {
             entity->visit(unsortable);
         }
         to_fill.append(std::move(unsortable.to_fill));
-    }
-    else {
-        for (const ExtrusionEntity* entity : coll.entities) {
+    } else {
+        for (const ExtrusionEntity* entity : coll.entities()) {
             entity->visit(*this);
         }
     }
 }
 
-ExtrusionEntityCollection&&
-FlatenEntities::flatten(const ExtrusionEntityCollection &to_flatten) && {
+ExtrusionEntityCollection&& FlatenEntities::flatten(const ExtrusionEntityCollection &to_flatten) && {
     use(to_flatten);
     return std::move(to_fill);
-}
-
-
-double
-ExtrusionEntityCollection::min_mm3_per_mm() const
-{
-    double min_mm3_per_mm = std::numeric_limits<double>::max();
-    for (const ExtrusionEntity *entity : this->entities)
-        if(entity->role() != erGapFill && entity->role() != erThinWall && entity->role() != erMilling)
-            min_mm3_per_mm = std::min(min_mm3_per_mm, entity->min_mm3_per_mm());
-    return min_mm3_per_mm;
 }
 
 }

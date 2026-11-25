@@ -1,3 +1,7 @@
+///|/ Copyright (c) Prusa Research 2018 - 2022 Enrico Turri @enricoturri1966, Vojtěch Bubník @bubnikv, Lukáš Matěna @lukasmatena, Tomáš Mészáros @tamasmeszaros
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #ifndef slic3r_Format_3mf_hpp_
 #define slic3r_Format_3mf_hpp_
 
@@ -25,22 +29,40 @@ namespace Slic3r {
     };
 
     class Model;
+    struct ConfigSubstitutionContext;
     class DynamicPrintConfig;
-#if ENABLE_THUMBNAIL_GENERATOR
     struct ThumbnailData;
-#endif // ENABLE_THUMBNAIL_GENERATOR
+
+    // Returns true if the 3mf file with the given filename is a PrusaSlicer project file (i.e. if it contains a config).
+    extern bool is_project_3mf(const std::string& filename);
 
     // Load the content of a 3mf file into the given model and preset bundle.
-    extern bool load_3mf(const char* path, DynamicPrintConfig* config, Model* model, bool check_version);
+    extern bool load_3mf(const char *path,
+                         DynamicPrintConfig &config,
+                         ConfigSubstitutionContext &config_substitutions,
+                         Model *model,
+                         bool check_version,
+                         bool unbake_transformation);
+
+    struct OptionStore3mf {
+        bool fullpath_sources = true;
+        bool zip64 = true;
+        bool export_config = true;
+        bool export_modifiers = true;
+        int bake_transformation_in_mesh = -1;
+        const ThumbnailData* thumbnail_data = nullptr;
+        OptionStore3mf set_fullpath_sources(bool use_fullpath_sources) { fullpath_sources = use_fullpath_sources; return *this; }
+        OptionStore3mf set_zip64(bool use_zip64) { zip64 = use_zip64; return *this; }
+        OptionStore3mf set_export_config(bool use_export_config) { export_config = use_export_config; return *this; }
+        OptionStore3mf set_export_modifiers(bool use_export_modifiers) { export_modifiers = use_export_modifiers; return *this; }
+        OptionStore3mf set_thumbnail_data(const ThumbnailData* thumbnail) { thumbnail_data = thumbnail; return *this; }
+        OptionStore3mf set_bake_transformation_in_mesh(bool use_bake_transformation_in_mesh) { this->bake_transformation_in_mesh = use_bake_transformation_in_mesh ? 1 : 0; return *this; }
+    };
 
     // Save the given model and the config data contained in the given Print into a 3mf file.
     // The model could be modified during the export process if meshes are not repaired or have no shared vertices
-#if ENABLE_THUMBNAIL_GENERATOR
-    extern bool store_3mf(const char* path, Model* model, const DynamicPrintConfig* config, bool fullpath_sources, const ThumbnailData* thumbnail_data = nullptr);
-#else
-    extern bool store_3mf(const char* path, Model* model, const DynamicPrintConfig* config, bool fullpath_sources);
-#endif // ENABLE_THUMBNAIL_GENERATOR
+    extern bool store_3mf(const char* path, Model* model, const DynamicPrintConfig* config, OptionStore3mf options = OptionStore3mf{});
 
-}; // namespace Slic3r
+} // namespace Slic3r
 
 #endif /* slic3r_Format_3mf_hpp_ */

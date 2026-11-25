@@ -1,41 +1,33 @@
+///|/ Copyright (c) Prusa Research 2020 - 2023 Vojtěch Bubník @bubnikv, Tomáš Mészáros @tamasmeszaros
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #ifndef SLA_SUPPORTTREE_HPP
 #define SLA_SUPPORTTREE_HPP
 
 #include <vector>
 #include <memory>
-#include <Eigen/Geometry>
 
-#include <libslic3r/SLA/Common.hpp>
+#include <libslic3r/Polygon.hpp>
+#include <libslic3r/ExPolygon.hpp>
+#include <libslic3r/AABBMesh.hpp>
+
 #include <libslic3r/SLA/Pad.hpp>
-#include <libslic3r/SLA/EigenMesh3D.hpp>
 #include <libslic3r/SLA/SupportPoint.hpp>
 #include <libslic3r/SLA/JobController.hpp>
+#include <libslic3r/SLA/SupportTreeStrategies.hpp>
 
 namespace Slic3r {
 
-class TriangleMesh;
-class Model;
-class ModelInstance;
-class ModelObject;
-class Polygon;
-class ExPolygon;
-
-using Polygons = std::vector<Polygon>;
-using ExPolygons = std::vector<ExPolygon>;
-
 namespace sla {
 
-enum class PillarConnectionMode
-{
-    zigzag,
-    cross,
-    dynamic
-};
-
-struct SupportConfig
+struct SupportTreeConfig
 {
     bool   enabled = true;
-    
+
+    // Type of the support tree, for
+    SupportTreeType tree_type = SupportTreeType::Default;
+
     // Radius in mm of the pointing side of the head.
     double head_front_radius_mm = 0.2;
 
@@ -44,6 +36,8 @@ struct SupportConfig
 
     // Radius of the back side of the 3d arrow.
     double head_back_radius_mm = 0.5;
+
+    double head_fallback_radius_mm = 0.25;
 
     // Width in mm from the back sphere center to the front sphere center.
     double head_width_mm = 1.0;
@@ -58,7 +52,7 @@ struct SupportConfig
     // when bridges and pillars are merged. The resulting pillar should be a bit
     // thicker than the ones merging into it. How much thicker? I don't know
     // but it will be derived from this value.
-    double pillar_widening_factor = 0.5;
+    double pillar_widening_factor = .5;
 
     // Radius in mm of the pillar base.
     double base_radius_mm = 2.0;
@@ -84,10 +78,18 @@ struct SupportConfig
     double pillar_base_safety_distance_mm = 0.5;
     
     unsigned max_bridges_on_pillar = 3;
-    
+
+    double max_weight_on_model_support = 10.f;
+
     double head_fullwidth() const {
         return 2 * head_front_radius_mm + head_width_mm +
                2 * head_back_radius_mm - head_penetration_mm;
+    }
+
+    double safety_distance() const { return safety_distance_mm; }
+    double safety_distance(double r) const
+    {
+        return std::min(safety_distance_mm, r * safety_distance_mm / head_back_radius_mm);
     }
 
     // /////////////////////////////////////////////////////////////////////////
@@ -95,16 +97,18 @@ struct SupportConfig
     // /////////////////////////////////////////////////////////////////////////
 
     // The max Z angle for a normal at which it will get completely ignored.
-    static const double normal_cutoff_angle;
+    static const double constexpr normal_cutoff_angle = 150.0 * M_PI / 180.0;
 
-    // The shortest distance of any support structure from the model surface
-    static const double safety_distance_mm;
+    // The safety gap between a support structure and model body. For support
+    // struts smaller than head_back_radius, the safety distance is scaled
+    // down accordingly. see method safety_distance()
+    static const double constexpr safety_distance_mm = 0.5;
 
-    static const double max_solo_pillar_height_mm;
-    static const double max_dual_pillar_height_mm;
-    static const double   optimizer_rel_score_diff;
-    static const unsigned optimizer_max_iterations;
-    static const unsigned pillar_cascade_neighbors;
+    static const double constexpr max_solo_pillar_height_mm = 15.0;
+    static const double constexpr max_dual_pillar_height_mm = 35.0;
+    static const double constexpr optimizer_rel_score_diff = 1e-10;
+    static const unsigned constexpr optimizer_max_iterations = 2000;
+    static const unsigned constexpr pillar_cascade_neighbors = 3;
     
 };
 
@@ -112,57 +116,48 @@ enum class MeshType { Support, Pad };
 
 struct SupportableMesh
 {
-    EigenMesh3D   emesh;
-    SupportPoints pts;
-    SupportConfig cfg;
+    AABBMesh          emesh;
+    SupportPoints     pts;
+    SupportTreeConfig cfg;
+    PadConfig         pad_cfg;
+    double            zoffset = 0.;
 
-    explicit SupportableMesh(const TriangleMesh & trmsh,
-                             const SupportPoints &sp,
-                             const SupportConfig &c)
+    explicit SupportableMesh(const indexed_triangle_set &trmsh,
+                             const SupportPoints        &sp,
+                             const SupportTreeConfig    &c)
         : emesh{trmsh}, pts{sp}, cfg{c}
     {}
-    
-    explicit SupportableMesh(const EigenMesh3D   &em,
-                             const SupportPoints &sp,
-                             const SupportConfig &c)
-        : emesh{em}, pts{sp}, cfg{c}
-    {}
+
+//    explicit SupportableMesh(const AABBMesh          &em,
+//                             const SupportPoints     &sp,
+//                             const SupportTreeConfig &c)
+//        : emesh{em}, pts{sp}, cfg{c}
+//    {}
 };
 
-/// The class containing mesh data for the generated supports.
-class SupportTree
+inline double ground_level(const SupportableMesh &sm)
 {
-    JobController m_ctl;
-public:
-    using UPtr = std::unique_ptr<SupportTree>;
-    
-    static UPtr create(const SupportableMesh &input,
-                       const JobController &ctl = {});
+    double lvl = sm.zoffset -
+                 !bool(sm.pad_cfg.embed_object) * sm.cfg.enabled * sm.cfg.object_elevation_mm +
+                  bool(sm.pad_cfg.embed_object) * sm.pad_cfg.wall_thickness_mm;
 
-    virtual ~SupportTree() = default;
-
-    virtual const TriangleMesh &retrieve_mesh(MeshType meshtype) const = 0;
-
-    /// Adding the "pad" under the supports.
-    /// modelbase will be used according to the embed_object flag in PoolConfig.
-    /// If set, the plate will be interpreted as the model's intrinsic pad. 
-    /// Otherwise, the modelbase will be unified with the base plate calculated
-    /// from the supports.
-    virtual const TriangleMesh &add_pad(const ExPolygons &modelbase,
-                                        const PadConfig & pcfg) = 0;
-    
-    virtual void remove_pad() = 0;
-    
-    std::vector<ExPolygons> slice(const std::vector<float> &,
-                                  float closing_radius) const;
-    
-    void retrieve_full_mesh(TriangleMesh &outmesh) const;
-    
-    const JobController &ctl() const { return m_ctl; }
-};
-
+    return lvl;
 }
 
-}
+indexed_triangle_set create_support_tree(const SupportableMesh &mesh,
+                                         const JobController   &ctl);
+
+indexed_triangle_set create_pad(const SupportableMesh      &model_mesh,
+                                const indexed_triangle_set &support_mesh,
+                                const JobController        &ctl);
+
+std::vector<ExPolygons> slice(const indexed_triangle_set &support_mesh,
+                              const indexed_triangle_set &pad_mesh,
+                              const std::vector<float>   &grid,
+                              float                       closing_radius,
+                              const JobController        &ctl);
+
+} // namespace sla
+} // namespace Slic3r
 
 #endif // SLASUPPORTTREE_HPP

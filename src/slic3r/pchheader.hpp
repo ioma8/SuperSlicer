@@ -1,3 +1,7 @@
+///|/ Copyright (c) Prusa Research 2018 - 2021 Vojtěch Bubník @bubnikv
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #ifdef WIN32
 	#ifndef WIN32_LEAN_AND_MEAN
 		#define WIN32_LEAN_AND_MEAN
@@ -8,22 +12,17 @@
 	#include <Windows.h>
 #endif
 
-#include <float.h>
-#include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cassert>
+#include <cfloat>
 #include <chrono>
 #include <condition_variable>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -41,6 +40,7 @@
 #include <memory>
 #include <mutex>
 #include <numeric>
+#include <optional>
 #include <ostream>
 #include <random>
 #include <regex>
@@ -77,15 +77,21 @@
 #include <boost/nowide/convert.hpp>
 #include <boost/nowide/cstdio.hpp>
 #include <boost/nowide/fstream.hpp>
-#include <boost/optional.hpp>
+
+// boost/property_tree/json_parser/detail/parser.hpp includes boost/bind.hpp, which is deprecated.
+// Suppress the following boost message:
+// The practice of declaring the Bind placeholders (_1, _2, ...) in the global namespace is deprecated.
+#define BOOST_BIND_GLOBAL_PLACEHOLDERS
 #include <boost/property_tree/ini_parser.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/ptree_fwd.hpp>
+#undef BOOST_BIND_GLOBAL_PLACEHOLDERS
+
 #include <boost/system/error_code.hpp>
 
-#include <tbb/parallel_for.h>
-#include <tbb/spin_mutex.h>
+#include <oneapi/tbb/parallel_for.h>
+#include <oneapi/tbb/spin_mutex.h>
 
 #ifdef _MSC_VER
 	// avoid some "macro redefinition" warnings
@@ -183,3 +189,7 @@
 #include "libslic3r/BoundingBox.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/libslic3r.h"
+
+#ifdef _WIN32
+#include "GUI/format.hpp"
+#endif // _WIN32

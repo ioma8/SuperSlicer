@@ -1,3 +1,7 @@
+///|/ Copyright (c) Prusa Research 2020 Tomáš Mészáros @tamasmeszaros
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #ifndef SLA_SPATINDEX_HPP
 #define SLA_SPATINDEX_HPP
 
@@ -73,7 +77,7 @@ public:
     BoxIndex& operator=(BoxIndex&&);
     
     void insert(const BoxIndexEl&);
-    inline void insert(const BoundingBox& bb, unsigned idx)
+    void insert(const BoundingBox& bb, unsigned idx)
     {
         insert(std::make_pair(bb, unsigned(idx)));
     }

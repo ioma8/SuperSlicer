@@ -1,103 +1,79 @@
-name: C/C++ CI windows x64
+name: C/C++ Nightly windows x64
 
 on:
   push:
     branches:
-      - CI
+      - Nigthly
+      - nightly_dev
+      - nightly_2.7.62
+      - nightly_master
+      - nightly_2.7.63
+      - debug_win
+      - nightly_win
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: 'Test SignPath signing (two requests; requires test policy and certificate pin)'
+        type: boolean
+        default: false
 
+permissions:
+  contents: read
+
+env:
+  # SignPath code signing - see .github/signpath/README.md
+  # Test signing requires an explicit manual dispatch; ordinary nightly pushes never sign.
+  SIGNPATH_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.sign && 'true' || 'false' }}
+
+# Same jobs as the RC: dependencies and compilation (windows_build.yml), then signing
+# and packaging (windows_package.yml) from that exact artifact. No release publication.
 jobs:
-  build_dep:
-    runs-on: windows-latest
-    
+  signing:
+    name: Signing mode
+    runs-on: ubuntu-22.04
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
     steps:
-    - uses: actions/checkout@v2
-      with:
-        ref: 'CI'
-    - uses: ilammy/msvc-dev-cmd@v1
-    - name: mkdir in deps
-      run: mkdir deps/build
-    - name: cmake and make deps
-      working-directory: ./deps/build
+    - name: check signing configuration
+      if: env.SIGNPATH_ENABLED == 'true'
+      env:
+        SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+        SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG || 'superslicer' }}
+        SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_TEST_SIGNING_POLICY_SLUG }}
+        SIGNPATH_TEST_CERTIFICATE_THUMBPRINT: ${{ vars.SIGNPATH_TEST_CERTIFICATE_THUMBPRINT }}
+        # Only whether the secret is set; its value is not given to this job.
+        SIGNPATH_API_TOKEN_SET: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
       run: |
-        cmake .. -G "Visual Studio 16 2019" -A x64
-        msbuild /m ALL_BUILD.vcxproj
-    - name: Upload artifact
-      uses: actions/upload-artifact@v1.0.0
-      with:
-        name: deps_win
-        path: ./deps/build/destdir/
+        for name in SIGNPATH_ORGANIZATION_ID SIGNPATH_PROJECT_SLUG SIGNPATH_SIGNING_POLICY_SLUG SIGNPATH_TEST_CERTIFICATE_THUMBPRINT; do
+          value="${!name}"
+          if [ -z "${value//[[:space:]]/}" ]; then echo "::error::Missing $name. See .github/signpath/README.md."; exit 1; fi
+        done
+        if [ "$SIGNPATH_API_TOKEN_SET" != 'true' ]; then echo '::error::Missing SIGNPATH_API_TOKEN. See .github/signpath/README.md.'; exit 1; fi
+        if ! [[ "${SIGNPATH_TEST_CERTIFICATE_THUMBPRINT//[[:space:]]/}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          echo '::error::SIGNPATH_TEST_CERTIFICATE_THUMBPRINT must be the SHA-1 thumbprint of the test certificate.'; exit 1
+        fi
+    - name: Select the signing mode
+      id: mode
+      run: echo "mode=$([ "$SIGNPATH_ENABLED" = 'true' ] && echo test || echo none)" >> "$GITHUB_OUTPUT"
 
   build:
-    runs-on: windows-latest
-    needs: build_dep
-    
-    steps:
-    - uses: actions/checkout@v1
-    - uses: ilammy/msvc-dev-cmd@v1
-    - name: change date in version
-      shell: powershell
-      run: (Get-Content version.inc) | Foreach-Object {$_ -replace "\+UNKNOWN", ("_" + [datetime]::Today.ToString("yyyy-MM-dd"))} | Set-Content version.inc
-    - name: mkdir in deps directory
-      run: mkdir deps/destdir
-    - name: download deps
-      uses: actions/download-artifact@v1
-      with:
-        name: deps_win
-        path: deps/destdir
-    - name: echo dir deps
-      run: dir deps
-    - name: echo dir deps destdir
-      run: dir deps/destdir
-    - name: mkdir
-      run: mkdir build
-    - name: cmake
-      working-directory: ./build
-      run: cmake .. -G "Visual Studio 16 2019" -A x64 -DCMAKE_PREFIX_PATH="d:\a\SuperSlicer\SuperSlicer\deps\destdir\usr\local"
-    - name: make
-      working-directory: ./build
-      run: msbuild /m /P:Configuration=Release INSTALL.vcxproj
-    - name: create directory and copy into it
-      working-directory: ./build
-      run: ls
-    - name: create directory and copy into it
-      working-directory: ./build
-      shell: powershell
-        #todo: add the opengl folder
-      run: mkdir package
-    - name: copy from release
-      working-directory: ./build
-      shell: powershell
-      run: '(new-object System.Net.WebClient).DownloadFile("https://github.com/supermerill/SuperSlicer/releases/download/2.1.45.0/Slic3r++_2.1.45.0_win64_191104.zip", "Slic3r++_2.1.45.0_win64_191104.zip")'
-    - name: unzip
-      working-directory: ./build
-      shell: cmd
-      run: '"C:/Program Files/7-Zip/7z.exe" x Slic3r++_2.1.45.0_win64_191104.zip'
-    - name: copy old release content
-      working-directory: ./build
-      shell: cmd
-      run: xcopy /RCYIE Slic3r++_2.1.45.0_win64_191104\* package\
-    - name: copy new resources
-      working-directory: ./build
-      shell: cmd
-      run: xcopy /RCYIE ..\resources package\resources
-    - name: copy dll
-      working-directory: ./build
-      shell: cmd
-      run: xcopy /RCYIE src\release\*.dll package\
-    - name: copy exe
-      working-directory: ./build
-      shell: cmd
-      run: xcopy /RCYIE src\release\*.exe package\
-    - name: copy ms runtime
-      working-directory: ./build
-      shell: cmd
-      run: xcopy /RCYIE c:\windows\system32\VCRUNTIME140* package\
-#    - name: create zip
-#      working-directory: ./build
-#      shell: cmd
-#      run: '"C:/Program Files/7-Zip/7z.exe" a -tzip nightly.zip *'
-    - name: Upload artifact
-      uses: actions/upload-artifact@v1.0.0
-      with:
-        name: nightly_win64
-        path: build/package/
+    needs: signing
+    uses: ./.github/workflows/windows_build.yml
+    with:
+      source_sha: ${{ github.sha }}
+      mode: nightly
+
+  package:
+    needs: [signing, build]
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/windows_package.yml
+    with:
+      artifact_id: ${{ needs.build.outputs.artifact_id }}
+      source_sha: ${{ github.sha }}
+      mode: nightly
+      signing: ${{ needs.signing.outputs.mode }}
+    secrets:
+      # Unsigned packaging does not receive the SignPath token at all.
+      SIGNPATH_API_TOKEN: ${{ needs.signing.outputs.mode == 'test' && secrets.SIGNPATH_API_TOKEN || '' }}

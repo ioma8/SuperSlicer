@@ -1,12 +1,18 @@
 #include "CalibrationAbstractDialog.hpp"
 #include "I18N.hpp"
+#include "libslic3r/Model.hpp"
 #include "libslic3r/Utils.hpp"
 #include "GUI.hpp"
 #include "GUI_ObjectList.hpp"
 #include "Tab.hpp"
+#include "Plater.hpp"
+
 #include <wx/scrolwin.h>
 #include <wx/display.h>
 #include <wx/file.h>
+
+#include <boost/filesystem.hpp>
+#include <boost/filesystem/path.hpp>
 
 #if ENABLE_SCROLLABLE
 static wxSize get_screen_size(wxWindow* window)
@@ -20,13 +26,14 @@ static wxSize get_screen_size(wxWindow* window)
 namespace Slic3r {
 namespace GUI {
 
-    CalibrationAbstractDialog::CalibrationAbstractDialog(GUI_App* app, MainFrame* mainframe, std::string name)
+CalibrationAbstractDialog::CalibrationAbstractDialog(GUI_App* app, MainFrame* mainframe, std::string name)
         : DPIDialog(NULL, wxID_ANY, wxString(SLIC3R_APP_NAME) + " - " + _(L(name)),
 #if ENABLE_SCROLLABLE
-            wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+        wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER
 #else
-        wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+        wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER
 #endif // ENABLE_SCROLLABLE
+        , "calibration")
     {
         this->gui_app = app;
         this->main_frame = mainframe;
@@ -39,36 +46,82 @@ namespace GUI {
 
     }
 
-void CalibrationAbstractDialog::create(std::string html_path, wxSize dialog_size){
+void CalibrationAbstractDialog::create(boost::filesystem::path html_path, std::string html_name, wxSize dialog_size, bool include_close_button){
 
-    auto main_sizer = new wxBoxSizer(wxVERTICAL);
+    const AppConfig* app_config = get_app_config();
 
-    //html
-    html_viewer = new wxHtmlWindow(this, wxID_ANY,
+    // Create a panel for the entire content
+    wxPanel* main_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxFULL_REPAINT_ON_RESIZE);
+
+    // Create the sizer for the panel's content
+    wxBoxSizer* panel_sizer = new wxBoxSizer(wxVERTICAL);
+    gui_app->app_config->set("autocenter", "1");
+    
+    //language
+    wxString language = wxGetApp().current_language_code();
+    boost::filesystem::path full_file_path = (boost::filesystem::path(Slic3r::resources_dir()) / html_path/ (into_u8(language) + "_"+ html_name));
+    if (language == "en") {
+        full_file_path = (boost::filesystem::path(Slic3r::resources_dir()) / html_path / (html_name));
+    }else if (!boost::filesystem::exists(full_file_path)) {
+        language = wxGetApp().current_language_code_safe();
+        full_file_path = (boost::filesystem::path(Slic3r::resources_dir()) / html_path / (into_u8(language) + "_" + html_name));
+        if (!boost::filesystem::exists(full_file_path)) {
+            language = language.IsEmpty() ? "en" : language.BeforeFirst('_');
+            full_file_path = (boost::filesystem::path(Slic3r::resources_dir()) / html_path / (into_u8(language) + "_" + html_name));
+            if (!boost::filesystem::exists(full_file_path)) {
+                full_file_path = (boost::filesystem::path(Slic3r::resources_dir()) / html_path / (html_name));
+            }
+        }
+    }
+
+    // Create the HTML viewer and load the page
+    html_viewer = new wxHtmlWindow(main_panel, wxID_ANY,
         wxDefaultPosition, wxDefaultSize, wxHW_SCROLLBAR_AUTO);
-    html_viewer->LoadPage(Slic3r::resources_dir()+ html_path);
-    main_sizer->Add(html_viewer, 1, wxEXPAND | wxALL, 5);
+    html_viewer->LoadPage(GUI::from_u8(full_file_path.string()));
+    // when using hyperlink, open the browser.
+    html_viewer->Bind(wxEVT_HTML_LINK_CLICKED, [this](wxHtmlLinkEvent& evt) {
+        wxLaunchDefaultBrowser(evt.GetLinkInfo().GetHref());
+    });
+    panel_sizer->Add(html_viewer, 1, wxEXPAND | wxALL, 5);
 
+    // Adjust the dialog size
     wxDisplay display(wxDisplay::GetFromWindow(main_frame));
     wxRect screen = display.GetClientArea();
     dialog_size.x = std::min(int(dialog_size.x * this->scale_factor()), screen.width - 50);
     dialog_size.y = std::min(int(dialog_size.y * this->scale_factor()), screen.height - 50);
 
+    // Create the button sizer and configure the "Close" button
     wxStdDialogButtonSizer* buttons = new wxStdDialogButtonSizer();
     create_buttons(buttons);
 
-    wxButton* close = new wxButton(this, wxID_CLOSE, _(L("Close")));
-    close->Bind(wxEVT_BUTTON, &CalibrationAbstractDialog::close_me, this);
-    buttons->AddButton(close);
-    close->SetDefault();
-    close->SetFocus();
-    SetAffirmativeId(wxID_CLOSE);
+    if (!include_close_button) {//if you want to define a custom location for the close button
+        wxButton* close = new wxButton(main_panel, wxID_CLOSE , _L("Close"));
+        close->Bind(wxEVT_BUTTON, &CalibrationAbstractDialog::close_me, this);
+        buttons->AddButton(close);
+        close->SetDefault();
+        close->SetFocus();
+        SetAffirmativeId(wxID_CLOSE);
+    }
+
     buttons->Realize();
-    main_sizer->Add(buttons, 0, wxEXPAND | wxALL, 5);
+    panel_sizer->Add(buttons, 0, wxEXPAND | wxALL, 5);
+
+    // Set the panel's sizer and add the panel to the dialog
+    main_panel->SetSizer(panel_sizer);
+    wxBoxSizer* main_sizer = new wxBoxSizer(wxVERTICAL);
+    main_sizer->Add(main_panel, 1, wxEXPAND | wxALL, 0);
 
     SetSizer(main_sizer);
-    main_sizer->SetSizeHints(this);
     this->SetSize(dialog_size.x, dialog_size.y);
+    gui_app->app_config->set("autocenter", "0");
+    main_panel->Lower();// this may break some calibration windows... willl have to call Raise() on other calibration windows that have a panel
+
+    wxGetApp().UpdateDlgDarkUI(this);
+    // bool dark_mode = app_config->get_bool("dark_color_mode");// i guss these can be set as global variables?
+    // if (dark_mode) {
+    // can't change html text color, so keep white background
+    html_viewer->SetHTMLBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+    // }
 }
 
 void CalibrationAbstractDialog::close_me(wxCommandEvent& event_args) {
@@ -76,13 +129,13 @@ void CalibrationAbstractDialog::close_me(wxCommandEvent& event_args) {
     this->Destroy();
 }
 
-ModelObject* CalibrationAbstractDialog::add_part(ModelObject* model_object, std::string input_file, Vec3d move, Vec3d scale) {
+void CalibrationAbstractDialog::add_part(ModelObject* model_object, std::string input_file, Vec3d move, Vec3d scale, bool rotate) {
     Model model;
     try {
         model = Model::read_from_file(input_file);
     }
     catch (std::exception & e) {
-        auto msg = _(L("Error!")) + " " + input_file + " : " + e.what() + ".";
+        auto msg = _L("Error!") + " " + input_file + " : " + e.what() + ".";
         show_error(this, msg);
         exit(1);
     }
@@ -99,6 +152,8 @@ ModelObject* CalibrationAbstractDialog::add_part(ModelObject* model_object, std:
             if (scale != Vec3d{ 1,1,1 }) {
                 volume->scale(scale);
             }
+            if(rotate)
+                volume->rotate(Geometry::deg2rad(this->main_frame->plater()->config()->opt_float("init_z_rotate")), Axis::Z);
             ModelVolume* new_volume = model_object->add_volume(*volume);
             new_volume->set_type(ModelVolumeType::MODEL_PART);
             new_volume->name = boost::filesystem::path(input_file).filename().string();
@@ -107,6 +162,7 @@ ModelObject* CalibrationAbstractDialog::add_part(ModelObject* model_object, std:
 
             // set a default extruder value, since user can't add it manually
             new_volume->config.set_key_value("extruder", new ConfigOptionInt(0));
+            new_volume->config.set_key_value("first_layer_extruder", new ConfigOptionInt(0));
 
             //move to bed
             /* const TriangleMesh& hull = new_volume->get_convex_hull();
@@ -119,7 +175,6 @@ ModelObject* CalibrationAbstractDialog::add_part(ModelObject* model_object, std:
         }
     }
     assert(model.objects.size() == 1);
-    return model.objects.empty()?nullptr: model.objects[0];
 }
 
 void CalibrationAbstractDialog::on_dpi_changed(const wxRect& suggested_rect)
@@ -147,7 +202,7 @@ wxPanel* CalibrationAbstractDialog::create_header(wxWindow* parent, const wxFont
     sizer->AddStretchSpacer();
 
     // text
-    wxStaticText* text = new wxStaticText(panel, wxID_ANY, _(L("Keyboard shortcuts")));
+    wxStaticText* text = new wxStaticText(panel, wxID_ANY, _L("Keyboard shortcuts"));
     text->SetFont(header_font);
     sizer->Add(text, 0, wxALIGN_CENTER_VERTICAL);
 

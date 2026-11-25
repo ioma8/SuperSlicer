@@ -2,6 +2,7 @@
 #define slic3r_FillSmooth_hpp_
 
 #include "../libslic3r.h"
+#include "../ExtrusionRole.hpp"
 
 #include "FillBase.hpp"
 
@@ -10,17 +11,20 @@ namespace Slic3r {
 class FillSmooth : public Fill
 {
 public:
-    FillSmooth() {
+    FillSmooth() : Fill() {
         nbPass = 2;
         anglePass[0] = 0;
         anglePass[1] = float(M_PI/2);
         anglePass[2] = 0;
-        fillPattern[0] = InfillPattern::ipRectilinearWGapFill;
+        fillPattern[0] = InfillPattern::ipMonotonic;//ipRectilinearWGapFill;
+        has_gap_fill[0] = true;
         fillPattern[1] = InfillPattern::ipRectilinear;
+        has_gap_fill[1] = false;
         fillPattern[2] = InfillPattern::ipRectilinear;
-        rolePass[0] = erSolidInfill;
-        rolePass[1] = erTopSolidInfill;
-        rolePass[2] = erTopSolidInfill;
+        has_gap_fill[2] = false;
+        rolePass[0] = ExtrusionRole::None;// ExtrusionRole::TopSolidInfill;
+        rolePass[1] = ExtrusionRole::Ironing;
+        rolePass[2] = ExtrusionRole::Ironing;
         percentWidth[0] = 1;
         percentWidth[1] = 2;
         percentWidth[2] = 1.0;
@@ -48,17 +52,19 @@ protected:
     double percentFlow[3];
     //angle to add to base angle
     float anglePass[3];
+    // gapfill?
+    bool has_gap_fill[3];
     //if false, it won't overlap inside the perimeters
     bool has_overlap[3];
     // profile for base width, speed, etc.
-    ExtrusionRole rolePass[3];
+    ExtrusionRole rolePass[3] = {ExtrusionRole::None, ExtrusionRole::None, ExtrusionRole::None};
     //fill algorithm to call
     InfillPattern fillPattern[3];
 
     void perform_single_fill(const int idx, ExtrusionEntityCollection &eecroot, const Surface &srf_source,
-        const FillParams &params, const double volume) const;
+        const FillParams &params) const;
     void fill_expolygon(const int idx, ExtrusionEntityCollection &eec, const Surface &srf_to_fill,
-        const FillParams &params, const double volume) const;
+        const FillParams &params) const;
 };
 
 
@@ -71,11 +77,14 @@ public:
         anglePass[1] = float(M_PI / 2);
         anglePass[2] = float(M_PI / 12); //align with nothing
         fillPattern[0] = InfillPattern::ipHilbertCurve; //ipRectilinear
+        has_gap_fill[0] = false;
         fillPattern[1] = InfillPattern::ipConcentric;
+        has_gap_fill[1] = false;
         fillPattern[2] = InfillPattern::ipRectilinear;
-        rolePass[0] = erTopSolidInfill;//erSolidInfill
-        rolePass[1] = erSolidInfill;
-        rolePass[2] = erTopSolidInfill;
+        has_gap_fill[2] = false;
+        rolePass[0] = ExtrusionRole::SolidInfill;//erSolidInfill
+        rolePass[1] = ExtrusionRole::TopSolidInfill;
+        rolePass[2] = ExtrusionRole::Ironing;
         percentWidth[0] = 1; //0.8
         percentWidth[1] = 1.5;
         percentWidth[2] = 2.8;
@@ -104,11 +113,14 @@ public:
         anglePass[1] = float(M_PI / 4);
         anglePass[2] = float(M_PI / 4);
         fillPattern[0] = InfillPattern::ipHilbertCurve; //ipHilbertCurve
+        has_gap_fill[0] = false;
         fillPattern[1] = InfillPattern::ipHilbertCurve;
+        has_gap_fill[1] = false;
         fillPattern[2] = InfillPattern::ipRectilinear;
-        rolePass[0] = erSolidInfill;
-        rolePass[1] = erTopSolidInfill;
-        rolePass[2] = erTopSolidInfill;
+        has_gap_fill[2] = false;
+        rolePass[0] = ExtrusionRole::TopSolidInfill;
+        rolePass[1] = ExtrusionRole::Ironing;
+        rolePass[2] = ExtrusionRole::Ironing;
         percentWidth[0] = 1;
         percentWidth[1] = 1.5;
         percentWidth[2] = 1.0;

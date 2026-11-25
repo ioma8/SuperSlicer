@@ -1,3 +1,8 @@
+///|/ Copyright (c) Prusa Research 2018 - 2023 Oleksandra Iushchenko @YuSanka, Enrico Turri @enricoturri1966, Vojtěch Bubník @bubnikv, David Kocík @kocikdav, Lukáš Matěna @lukasmatena, Tomáš Mészáros @tamasmeszaros, Vojtěch Král @vojtechkral
+///|/ Copyright (c) 2020 Benjamin Greiner
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #include "wxExtensions.hpp"
 
 #include <stdexcept>
@@ -7,6 +12,9 @@
 
 #include <boost/algorithm/string/replace.hpp>
 
+
+#include "libslic3r/AppConfig.hpp"
+
 #include "BitmapCache.hpp"
 #include "GUI.hpp"
 #include "GUI_App.hpp"
@@ -14,20 +22,27 @@
 #include "libslic3r/Config.hpp"
 #include "I18N.hpp"
 #include "GUI_Utils.hpp"
+#include "Plater.hpp"
 #include "../Utils/MacDarkMode.hpp"
+#include "BitmapComboBox.hpp"
+#include "libslic3r/Utils.hpp"
+#include "OG_CustomCtrl.hpp"
+#include "format.hpp"
 
-#ifndef __WXGTK__// msw_menuitem_bitmaps is used for MSW and OSX
+#include "libslic3r/Color.hpp"
+
+#ifndef __linux__
+// msw_menuitem_bitmaps is used for MSW and OSX
 static std::map<int, std::string> msw_menuitem_bitmaps;
-#ifdef __WXMSW__
-void msw_rescale_menu(wxMenu* menu)
+void sys_color_changed_menu(wxMenu* menu)
 {
 	struct update_icons {
 		static void run(wxMenuItem* item) {
 			const auto it = msw_menuitem_bitmaps.find(item->GetId());
 			if (it != msw_menuitem_bitmaps.end()) {
-				const wxBitmap& item_icon = create_scaled_bitmap(it->second);
-				if (item_icon.IsOk())
-					item->SetBitmap(item_icon);
+				wxBitmapBundle* item_icon = get_bmp_bundle(it->second);
+				if (item_icon->IsOk())
+					item->SetBitmap(*item_icon);
 			}
 			if (item->IsSubMenu())
 				for (wxMenuItem *sub_item : item->GetSubMenu()->GetMenuItems())
@@ -38,37 +53,29 @@ void msw_rescale_menu(wxMenu* menu)
 	for (wxMenuItem *item : menu->GetMenuItems())
 		update_icons::run(item);
 }
-#endif /* __WXMSW__ */
-#endif /* no __WXGTK__ */
+#endif /* no __linux__ */
 
 void enable_menu_item(wxUpdateUIEvent& evt, std::function<bool()> const cb_condition, wxMenuItem* item, wxWindow* win)
 {
     const bool enable = cb_condition();
     evt.Enable(enable);
-
-#ifdef __WXOSX__
-    const auto it = msw_menuitem_bitmaps.find(item->GetId());
-    if (it != msw_menuitem_bitmaps.end())
-    {
-        const wxBitmap& item_icon = create_scaled_bitmap(it->second, win, 16, !enable);
-        if (item_icon.IsOk())
-            item->SetBitmap(item_icon);
-    }
-#endif // __WXOSX__
 }
 
 wxMenuItem* append_menu_item(wxMenu* menu, int id, const wxString& string, const wxString& description,
-    std::function<void(wxCommandEvent& event)> cb, const wxBitmap& icon, wxEvtHandler* event_handler,
-    std::function<bool()> const cb_condition, wxWindow* parent)
+    std::function<void(wxCommandEvent& event)> cb, wxBitmapBundle* icon, wxEvtHandler* event_handler,
+    std::function<bool()> const cb_condition, wxWindow* parent, int insert_pos/* = wxNOT_FOUND*/)
 {
     if (id == wxID_ANY)
         id = wxNewId();
 
     auto *item = new wxMenuItem(menu, id, string, description);
-    if (icon.IsOk()) {
-        item->SetBitmap(icon);
+    if (icon && icon->IsOk()) {
+        item->SetBitmap(*icon);
     }
-    menu->Append(item);
+    if (insert_pos == wxNOT_FOUND)
+        menu->Append(item);
+    else
+        menu->Insert(insert_pos, item);
 
 #ifdef __WXMSW__
     if (event_handler != nullptr && event_handler != menu)
@@ -87,19 +94,19 @@ wxMenuItem* append_menu_item(wxMenu* menu, int id, const wxString& string, const
 
 wxMenuItem* append_menu_item(wxMenu* menu, int id, const wxString& string, const wxString& description,
     std::function<void(wxCommandEvent& event)> cb, const std::string& icon, wxEvtHandler* event_handler,
-    std::function<bool()> const cb_condition, wxWindow* parent)
+    std::function<bool()> const cb_condition, wxWindow* parent, int insert_pos/* = wxNOT_FOUND*/)
 {
     if (id == wxID_ANY)
         id = wxNewId();
 
-    const wxBitmap& bmp = !icon.empty() ? create_scaled_bitmap(icon) : wxNullBitmap;   // FIXME: pass window ptr
-//#ifdef __WXMSW__
-#ifndef __WXGTK__
-    if (bmp.IsOk())
-        msw_menuitem_bitmaps[id] = icon;
-#endif /* __WXMSW__ */
+    wxBitmapBundle* bmp = icon.empty() ? nullptr : get_bmp_bundle(icon);
 
-    return append_menu_item(menu, id, string, description, cb, bmp, event_handler, cb_condition, parent);
+#ifndef __linux__
+    if (bmp && bmp->IsOk())
+        msw_menuitem_bitmaps[id] = icon;
+#endif /* no __linux__ */
+
+    return append_menu_item(menu, id, string, description, cb, bmp, event_handler, cb_condition, parent, insert_pos);
 }
 
 wxMenuItem* append_submenu(wxMenu* menu, wxMenu* sub_menu, int id, const wxString& string, const wxString& description, const std::string& icon,
@@ -110,11 +117,11 @@ wxMenuItem* append_submenu(wxMenu* menu, wxMenu* sub_menu, int id, const wxStrin
 
     wxMenuItem* item = new wxMenuItem(menu, id, string, description);
     if (!icon.empty()) {
-        item->SetBitmap(create_scaled_bitmap(icon));    // FIXME: pass window ptr
-//#ifdef __WXMSW__
-#ifndef __WXGTK__
+        item->SetBitmap(*get_bmp_bundle(icon));
+
+#ifndef __linux__
         msw_menuitem_bitmaps[id] = icon;
-#endif /* __WXMSW__ */
+#endif // no __linux__
     }
 
     item->SetSubMenu(sub_menu);
@@ -172,9 +179,37 @@ wxMenuItem* append_menu_check_item(wxMenu* menu, int id, const wxString& string,
     return item;
 }
 
+uint32_t color_from_hex(std::string hex)
+{
+    std::stringstream ss;
+    ss << std::hex << hex;
+    uint32_t color_bad_endian;
+    ss >> color_bad_endian;
+    uint32_t color = 0;
+    color |= (color_bad_endian & 0xFF) << 16;
+    color |= (color_bad_endian & 0xFF00);
+    color |= (color_bad_endian & 0xFF0000) >> 16;
+    return color;
+}
+
+wxColour color_from_int(uint32_t color)
+{
+    return wxColour{ uint8_t(color & 0xFF), uint8_t((color & 0xFF00) >> 8) , uint8_t((color & 0xFF0000) >> 16) , uint8_t(255) };
+}
+
+std::string color_to_hex(uint32_t color)
+{
+    uint32_t color_bad_endian = 0;
+    color_bad_endian |= (color & 0xFF) << 16;
+    color_bad_endian |= (color & 0xFF00);
+    color_bad_endian |= (color & 0xFF0000) >> 16;
+    std::stringstream ss;
+    ss << std::hex << color_bad_endian;
+    return ss.str();
+}
+
 const unsigned int wxCheckListBoxComboPopup::DefaultWidth = 200;
 const unsigned int wxCheckListBoxComboPopup::DefaultHeight = 200;
-const unsigned int wxCheckListBoxComboPopup::DefaultItemHeight = 18;
 
 bool wxCheckListBoxComboPopup::Create(wxWindow* parent)
 {
@@ -198,17 +233,22 @@ wxString wxCheckListBoxComboPopup::GetStringValue() const
 
 wxSize wxCheckListBoxComboPopup::GetAdjustedSize(int minWidth, int prefHeight, int maxHeight)
 {
-    // matches owner wxComboCtrl's width
-    // and sets height dinamically in dependence of contained items count
+    // set width dinamically in dependence of items text
+    // and set height dinamically in dependence of items count
 
     wxComboCtrl* cmb = GetComboCtrl();
-    if (cmb != nullptr)
-    {
+    if (cmb != nullptr) {
         wxSize size = GetComboCtrl()->GetSize();
 
         unsigned int count = GetCount();
-        if (count > 0)
-            size.SetHeight(count * DefaultItemHeight);
+        if (count > 0) {
+            int max_width = size.x;
+            for (unsigned int i = 0; i < count; ++i) {
+                max_width = std::max(max_width, 60 + GetTextExtent(GetString(i)).x);
+            }
+            size.SetWidth(max_width);
+            size.SetHeight(count * cmb->GetCharHeight());
+        }
         else
             size.SetHeight(DefaultHeight);
 
@@ -300,94 +340,6 @@ void wxCheckListBoxComboPopup::OnListBoxSelection(wxCommandEvent& evt)
 }
 
 
-namespace Slic3r {
-namespace GUI {
-
-// ***  PresetBitmapComboBox  ***
-
-/* For PresetBitmapComboBox we use bitmaps that are created from images that are already scaled appropriately for Retina
- * (Contrary to the intuition, the `scale` argument for Bitmap's constructor doesn't mean
- * "please scale this to such and such" but rather
- * "the wxImage is already sized for backing scale such and such". )
- * Unfortunately, the constructor changes the size of wxBitmap too.
- * Thus We need to use unscaled size value for bitmaps that we use
- * to avoid scaled size of control items.
- * For this purpose control drawing methods and
- * control size calculation methods (virtual) are overridden.
- **/
-
-PresetBitmapComboBox::PresetBitmapComboBox(wxWindow* parent, const wxSize& size) :
-    wxBitmapComboBox(parent, wxID_ANY, wxEmptyString, wxDefaultPosition, size, 0, nullptr, wxCB_READONLY)
-{}
-
-#ifdef __APPLE__
-bool PresetBitmapComboBox::OnAddBitmap(const wxBitmap& bitmap)
-{
-    if (bitmap.IsOk())
-    {
-        // we should use scaled! size values of bitmap
-        int width = (int)bitmap.GetScaledWidth();
-        int height = (int)bitmap.GetScaledHeight();
-
-        if (m_usedImgSize.x < 0)
-        {
-            // If size not yet determined, get it from this image.
-            m_usedImgSize.x = width;
-            m_usedImgSize.y = height;
-
-            // Adjust control size to vertically fit the bitmap
-            wxWindow* ctrl = GetControl();
-            ctrl->InvalidateBestSize();
-            wxSize newSz = ctrl->GetBestSize();
-            wxSize sz = ctrl->GetSize();
-            if (newSz.y > sz.y)
-                ctrl->SetSize(sz.x, newSz.y);
-            else
-                DetermineIndent();
-        }
-
-        wxCHECK_MSG(width == m_usedImgSize.x && height == m_usedImgSize.y,
-            false,
-            "you can only add images of same size");
-
-        return true;
-    }
-
-    return false;
-}
-
-void PresetBitmapComboBox::OnDrawItem(wxDC& dc,
-    const wxRect& rect,
-    int item,
-    int flags) const
-{
-    const wxBitmap& bmp = *(wxBitmap*)m_bitmaps[item];
-    if (bmp.IsOk())
-    {
-        // we should use scaled! size values of bitmap
-        wxCoord w = bmp.GetScaledWidth();
-        wxCoord h = bmp.GetScaledHeight();
-
-        const int imgSpacingLeft = 4;
-
-        // Draw the image centered
-        dc.DrawBitmap(bmp,
-            rect.x + (m_usedImgSize.x - w) / 2 + imgSpacingLeft,
-            rect.y + (rect.height - h) / 2,
-            true);
-    }
-
-    wxString text = GetString(item);
-    if (!text.empty())
-        dc.DrawText(text,
-            rect.x + m_imgAreaWidth + 1,
-            rect.y + (rect.height - dc.GetCharHeight()) / 2);
-}
-#endif
-}
-}
-
-
 // ***  wxDataViewTreeCtrlComboPopup  ***
 
 const unsigned int wxDataViewTreeCtrlComboPopup::DefaultWidth = 270;
@@ -445,17 +397,17 @@ void wxDataViewTreeCtrlComboPopup::OnDataViewTreeCtrlSelection(wxCommandEvent& e
 
 // edit tooltip : change Slic3r to SLIC3R_APP_KEY
 // Temporary workaround for localization
-void edit_tooltip(wxString& tooltip)
+void update_Slic3r_string(wxString& tooltip)
 {
-    tooltip.Replace("Slic3r", SLIC3R_APP_KEY, true);
+    tooltip.Replace("Slic3r", SLIC3R_APP_NAME, true);
 }
 
 /* Function for rescale of buttons in Dialog under MSW if dpi is changed.
  * btn_ids - vector of buttons identifiers
  */
-void msw_buttons_rescale(wxDialog* dlg, const int em_unit, const std::vector<int>& btn_ids)
+void msw_buttons_rescale(wxDialog* dlg, const int em_unit, const std::vector<int>& btn_ids, double height_koef/* = 1.*/)
 {
-    const wxSize& btn_size = wxSize(-1, int(2.5f * em_unit + 0.5f));
+    const wxSize& btn_size = wxSize(-1, int(2.5 * em_unit * height_koef + 0.5f));
 
     for (int btn_id : btn_ids) {
         // There is a case [FirmwareDialog], when we have wxControl instead of wxButton
@@ -487,96 +439,132 @@ int em_unit(wxWindow* win)
     return Slic3r::GUI::wxGetApp().em_unit();
 }
 
-int mode_icon_px_size()
+#ifdef __WXGTK2__
+static int scale() 
 {
-#ifdef __APPLE__
-    return 10;
-#else
-    return 12;
-#endif
+    return int(em_unit(nullptr) * 0.1f + 0.5f);
+}
+#endif // __WXGTK2__
+
+wxBitmapBundle* get_bmp_bundle(const std::string& bmp_name_in, int width/* = 16*/, int height/* = -1*/, const std::string& new_color/* = std::string()*/)
+{
+
+    // Try loading an SVG first, then PNG if SVG is not found:
+    Slic3r::ColorReplaces changes;
+    //grayscale: just ask for new_color="#606060"
+    if (new_color.empty() || new_color.size() > 7 || new_color.size() < 6) {
+        try {
+            uint32_t color_int = Slic3r::GUI::wxGetApp().app_config->create_color(0.86f, 0.93f);
+            changes.add("#ED6B21", color_int);
+            changes.add("#ed6b21", color_int);
+            changes.add("#ED8D21", Slic3r::GUI::wxGetApp().app_config->create_color(0.5f, 0.93f));
+            changes.add("#2172eb", color_int);
+        }
+        catch (std::exception /*e*/) {
+        }
+    } else {
+        changes.add("#ED6B21", new_color.size() == 7 ? new_color : (std::string("#") + new_color));
+        changes.add("#ed6b21", new_color.size() == 7 ? new_color : (std::string("#") + new_color));
+        //changes.add("#ED8D21", new_color.size() == 7 ? new_color : (std::string("#") + new_color));
+        changes.add("#2172eb", new_color.size() == 7 ? new_color : (std::string("#") + new_color));
+    }
+    
+    // already added in get_bmp_bundle(bmp_name_in, width, height, changes);
+    //if (Slic3r::GUI::wxGetApp().dark_mode()) {
+    //    changes.add("#808080", "#FFFFFF");
+    //}
+
+    return get_bmp_bundle(bmp_name_in, width, height, changes);
 }
 
-// win is used to get a correct em_unit value
-// It's important for bitmaps of dialogs.
-// if win == nullptr, em_unit value of MainFrame will be used
-wxBitmap create_scaled_bitmap(  const std::string& bmp_name_in, 
-                                wxWindow *win/* = nullptr*/,
-                                const int px_cnt/* = 16*/, 
-                                const bool grayscale/* = false*/)
-{
-    static Slic3r::GUI::BitmapCache cache;
 
-    unsigned int width = 0;
-    unsigned int height = (unsigned int)(em_unit(win) * px_cnt * 0.1f + 0.5f);
+wxBitmapBundle *get_bmp_bundle(const std::string &bmp_name_in, int width, int height, Slic3r::ColorReplaces &new_colors_rgb)
+{
+#ifdef __WXGTK2__
+    if (width > 0)
+        width *= scale();
+    if (height > 0)
+        height *= scale();
+#endif // __WXGTK2__
+    assert(width >= 0);
+    if (width < 0) {
+        width = std::max(0, height);
+    }
+    if (height < 0) {
+        height = width;
+    }
+    assert(height >= 0);
+
+    static Slic3r::GUI::BitmapCache cache;
 
     std::string bmp_name = bmp_name_in;
     boost::replace_last(bmp_name, ".png", "");
 
-    // Try loading an SVG first, then PNG if SVG is not found:
-    wxBitmap *bmp = cache.load_svg(bmp_name, width, height, grayscale, Slic3r::GUI::wxGetApp().dark_mode());
-    if (bmp == nullptr) {
-        bmp = cache.load_png(bmp_name, width, height, grayscale);
+    if (Slic3r::GUI::wxGetApp().dark_mode()) {
+        new_colors_rgb.add("#808080", "#FFFFFF");
+        new_colors_rgb.add("#000000", "#A0A0A0");
     }
 
+    //wxBitmap *bmp = cache.load_svg(bmp_name, width, height, grayscale, dark_mode, color);
+    wxBitmapBundle* bmp = cache.from_svg(bmp_name, unsigned(width), unsigned(height), new_colors_rgb);
     if (bmp == nullptr) {
+        bmp = cache.from_png(bmp_name, unsigned(width), unsigned(height), new_colors_rgb);
+        if (!bmp)
         // Neither SVG nor PNG has been found, raise error
-        throw std::runtime_error("Could not load bitmap: " + bmp_name);
+        throw Slic3r::RuntimeError("Could not load bitmap: " + bmp_name);
     }
-
-    return *bmp;
+    return bmp;
 }
 
-std::vector<wxBitmap*> get_extruder_color_icons(bool thin_icon/* = false*/)
+wxBitmapBundle* get_empty_bmp_bundle(int width, int height)
 {
-    static Slic3r::GUI::BitmapCache bmp_cache;
+    static Slic3r::GUI::BitmapCache cache;
+#ifdef __WXGTK2__
+    return cache.mkclear_bndl(width * scale(), height * scale());
+#else
+    return cache.mkclear_bndl(width, height);
+#endif // __WXGTK2__
+}
 
+wxBitmapBundle* get_solid_bmp_bundle(int width, int height, const std::string& color )
+{
+    static Slic3r::GUI::BitmapCache cache;
+#ifdef __WXGTK2__
+    return cache.mksolid_bndl(width * scale(), height * scale(), color, 1, Slic3r::GUI::wxGetApp().dark_mode());
+#else
+    return cache.mksolid_bndl(width, height, color, 1, Slic3r::GUI::wxGetApp().dark_mode());
+#endif // __WXGTK2__
+}
+
+std::vector<wxBitmapBundle*> get_extruder_color_icons(bool thin_icon/* = false*/)
+{
     // Create the bitmap with color bars.
-    std::vector<wxBitmap*> bmps;
+    std::vector<wxBitmapBundle*> bmps;
     std::vector<std::string> colors = Slic3r::GUI::wxGetApp().plater()->get_extruder_colors_from_plater_config();
 
     if (colors.empty())
         return bmps;
 
-    unsigned char rgb[3];
-
-    /* It's supposed that standard size of an icon is 36px*16px for 100% scaled display.
-     * So set sizes for solid_colored icons used for filament preset
-     * and scale them in respect to em_unit value
-     */
-    const double em = Slic3r::GUI::wxGetApp().em_unit();
-    const int icon_width = lround((thin_icon ? 1.6 : 3.2) * em);
-    const int icon_height = lround(1.6 * em);
-
     for (const std::string& color : colors)
-    {
-        std::string bitmap_key = color + "-h" + std::to_string(icon_height) + "-w" + std::to_string(icon_width);
-
-        wxBitmap* bitmap = bmp_cache.find(bitmap_key);
-        if (bitmap == nullptr) {
-            // Paint the color icon.
-            Slic3r::GUI::BitmapCache::parse_color(color, rgb);
-            // there is no neede to scale created solid bitmap
-            bitmap = bmp_cache.insert(bitmap_key, bmp_cache.mksolid(icon_width, icon_height, rgb, true));
-        }
-        bmps.emplace_back(bitmap);
-    }
+        bmps.emplace_back(get_solid_bmp_bundle(thin_icon ? 16 : 32, 16, color));
 
     return bmps;
 }
 
 
-void apply_extruder_selector(wxBitmapComboBox** ctrl, 
+void apply_extruder_selector(Slic3r::GUI::BitmapComboBox** ctrl, 
                              wxWindow* parent,
                              const std::string& first_item/* = ""*/, 
                              wxPoint pos/* = wxDefaultPosition*/,
                              wxSize size/* = wxDefaultSize*/,
                              bool use_thin_icon/* = false*/)
 {
-    std::vector<wxBitmap*> icons = get_extruder_color_icons(use_thin_icon);
+    std::vector<wxBitmapBundle*> icons = get_extruder_color_icons(use_thin_icon);
 
-    if (!*ctrl)
-        *ctrl = new wxBitmapComboBox(parent, wxID_ANY, wxEmptyString, pos, size,
-            0, nullptr, wxCB_READONLY);
+    if (!*ctrl) {
+        *ctrl = new Slic3r::GUI::BitmapComboBox(parent, wxID_ANY, wxEmptyString, pos, size, 0, nullptr, wxCB_READONLY);
+        Slic3r::GUI::wxGetApp().UpdateDarkUI(*ctrl);
+    }
     else
     {
         (*ctrl)->SetPosition(pos);
@@ -597,7 +585,7 @@ void apply_extruder_selector(wxBitmapComboBox** ctrl,
 
     int i = 0;
     wxString str = _(L("Extruder"));
-    for (wxBitmap* bmp : icons) {
+    for (wxBitmapBundle* bmp : icons) {
         if (i == 0) {
             if (!first_item.empty())
                 (*ctrl)->Append(_(first_item), *bmp);
@@ -628,12 +616,10 @@ LockButton::LockButton( wxWindow *parent,
     m_bmp_lock_open     = ScalableBitmap(this, "lock_open");
     m_bmp_lock_open_f   = ScalableBitmap(this, "lock_open_f");
 
-#ifdef __WXMSW__
-    SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
-#endif // __WXMSW__
+    Slic3r::GUI::wxGetApp().UpdateDarkUI(this);
     SetBitmap(m_bmp_lock_open.bmp());
     SetBitmapDisabled(m_bmp_lock_open.bmp());
-    SetBitmapHover(m_bmp_lock_closed_f.bmp());
+    SetBitmapCurrent(m_bmp_lock_closed_f.bmp());
 
     //button events
     Bind(wxEVT_BUTTON, &LockButton::OnButton, this);
@@ -644,24 +630,26 @@ void LockButton::OnButton(wxCommandEvent& event)
     if (m_disabled)
         return;
 
-    m_is_pushed = !m_is_pushed;
-    update_button_bitmaps();
-
+    SetLock(!m_is_pushed);
     event.Skip();
 }
 
 void LockButton::SetLock(bool lock)
 {
-    m_is_pushed = lock;
-    update_button_bitmaps();
+    if (m_is_pushed != lock) {
+        m_is_pushed = lock;
+        update_button_bitmaps();
+    }
 }
 
-void LockButton::msw_rescale()
+void LockButton::sys_color_changed()
 {
-    m_bmp_lock_closed.msw_rescale();
-    m_bmp_lock_closed_f.msw_rescale();
-    m_bmp_lock_open.msw_rescale();
-    m_bmp_lock_open_f.msw_rescale();
+    Slic3r::GUI::wxGetApp().UpdateDarkUI(this);
+
+    m_bmp_lock_closed.sys_color_changed();
+    m_bmp_lock_closed_f.sys_color_changed();
+    m_bmp_lock_open.sys_color_changed();
+    m_bmp_lock_open_f.sys_color_changed();
 
     update_button_bitmaps();
 }
@@ -669,121 +657,10 @@ void LockButton::msw_rescale()
 void LockButton::update_button_bitmaps()
 {
     SetBitmap(m_is_pushed ? m_bmp_lock_closed.bmp() : m_bmp_lock_open.bmp());
-    SetBitmapHover(m_is_pushed ? m_bmp_lock_closed_f.bmp() : m_bmp_lock_open_f.bmp());
+    SetBitmapCurrent(m_is_pushed ? m_bmp_lock_closed_f.bmp() : m_bmp_lock_open_f.bmp());
 
     Refresh();
     Update();
-}
-
-
-
-// ----------------------------------------------------------------------------
-// ModeButton
-// ----------------------------------------------------------------------------
-
-ModeButton::ModeButton( wxWindow *          parent,
-                        wxWindowID          id,
-                        const std::string&  icon_name   /* = ""*/,
-                        const wxString&     mode        /* = wxEmptyString*/,
-                        const wxSize&       size        /* = wxDefaultSize*/,
-                        const wxPoint&      pos         /* = wxDefaultPosition*/) :
-    ScalableButton(parent, id, icon_name, mode, size, pos, wxBU_EXACTFIT)
-{
-    Init(mode);
-}
-
-ModeButton::ModeButton( wxWindow*           parent,
-                        const wxString&     mode/* = wxEmptyString*/,
-                        const std::string&  icon_name/* = ""*/,
-                        int                 px_cnt/* = 16*/) :
-    ScalableButton(parent, wxID_ANY, ScalableBitmap(parent, icon_name, px_cnt), mode, wxBU_EXACTFIT)
-{
-    Init(mode);
-}
-
-void ModeButton::Init(const wxString &mode)
-{
-    std::string mode_str = std::string(mode.ToUTF8());
-    m_tt_focused  = Slic3r::GUI::from_u8((boost::format(_utf8(L("Switch to the %s mode"))) % mode_str).str());
-    m_tt_selected = Slic3r::GUI::from_u8((boost::format(_utf8(L("Current mode is %s"))) % mode_str).str());
-
-    SetBitmapMargins(3, 0);
-
-    //button events
-    Bind(wxEVT_BUTTON,          &ModeButton::OnButton, this);
-    Bind(wxEVT_ENTER_WINDOW,    &ModeButton::OnEnterBtn, this);
-    Bind(wxEVT_LEAVE_WINDOW,    &ModeButton::OnLeaveBtn, this);
-}
-
-void ModeButton::OnButton(wxCommandEvent& event)
-{
-    m_is_selected = true;
-    focus_button(m_is_selected);
-
-    event.Skip();
-}
-
-void ModeButton::SetState(const bool state)
-{
-    m_is_selected = state;
-    focus_button(m_is_selected);
-    SetToolTip(state ? m_tt_selected : m_tt_focused);
-}
-
-void ModeButton::focus_button(const bool focus)
-{
-    const wxFont& new_font = focus ? 
-                             Slic3r::GUI::wxGetApp().bold_font() : 
-                             Slic3r::GUI::wxGetApp().normal_font();
-
-    SetFont(new_font);
-    SetForegroundColour(wxSystemSettings::GetColour(focus ? wxSYS_COLOUR_BTNTEXT : wxSYS_COLOUR_BTNSHADOW));
-
-    Refresh();
-    Update();
-}
-
-
-// ----------------------------------------------------------------------------
-// ModeSizer
-// ----------------------------------------------------------------------------
-
-ModeSizer::ModeSizer(wxWindow *parent, int hgap/* = 0*/) :
-    wxFlexGridSizer(3, 0, hgap)
-{
-    SetFlexibleDirection(wxHORIZONTAL);
-
-    std::vector < std::pair < wxString, std::string >> buttons = {
-        {_(L("Simple")),    "mode_simple"},
-        {_(L("Advanced")),  "mode_advanced"},
-        {_(L("Expert")),    "mode_expert"},
-    };
-
-    auto modebtnfn = [](wxCommandEvent &event, int mode_id) {
-        Slic3r::GUI::wxGetApp().save_mode(mode_id);
-        event.Skip();
-    };
-    
-    m_mode_btns.reserve(3);
-    for (const auto& button : buttons) {
-        m_mode_btns.push_back(new ModeButton(parent, button.first, button.second, mode_icon_px_size()));
-
-        m_mode_btns.back()->Bind(wxEVT_BUTTON, std::bind(modebtnfn, std::placeholders::_1, int(m_mode_btns.size() - 1)));
-        Add(m_mode_btns.back());
-    }
-}
-
-void ModeSizer::SetMode(const int mode)
-{
-    for (size_t m = 0; m < m_mode_btns.size(); m++)
-        m_mode_btns[m]->SetState(int(m) == mode);
-}
-
-
-void ModeSizer::msw_rescale()
-{
-    for (size_t m = 0; m < m_mode_btns.size(); m++)
-        m_mode_btns[m]->msw_rescale();
 }
 
 // ----------------------------------------------------------------------------
@@ -817,45 +694,28 @@ void MenuWithSeparators::SetSecondSeparator()
 // PrusaBitmap
 // ----------------------------------------------------------------------------
 ScalableBitmap::ScalableBitmap( wxWindow *parent, 
-                                const std::string& icon_name/* = ""*/,
-                                const int px_cnt/* = 16*/):
+                                const std::string& icon_name,
+                                const int  width/* = 16*/,
+                                const int  height/* = -1*/,
+                                const bool grayscale/* = false*/):
     m_parent(parent), m_icon_name(icon_name),
-    m_px_cnt(px_cnt)
+    m_bmp_width(width), m_bmp_height(height)
 {
-    m_bmp = create_scaled_bitmap(icon_name, parent, px_cnt);
+    m_bmp = *get_bmp_bundle(icon_name, width, height);
+    m_bitmap = m_bmp.GetBitmapFor(m_parent);
 }
 
-wxSize ScalableBitmap::GetBmpSize() const
+ScalableBitmap::ScalableBitmap( wxWindow*           parent,
+                                const std::string&  icon_name,
+                                const wxSize        icon_size,
+                                const bool          grayscale/* = false*/) :
+ScalableBitmap(parent, icon_name, icon_size.x, icon_size.y, grayscale)
 {
-#ifdef __APPLE__
-    return m_bmp.GetScaledSize();
-#else
-    return m_bmp.GetSize();
-#endif
 }
 
-int ScalableBitmap::GetBmpWidth() const
+void ScalableBitmap::sys_color_changed()
 {
-#ifdef __APPLE__
-    return m_bmp.GetScaledWidth();
-#else
-    return m_bmp.GetWidth();
-#endif
-}
-
-int ScalableBitmap::GetBmpHeight() const
-{
-#ifdef __APPLE__
-    return m_bmp.GetScaledHeight();
-#else
-    return m_bmp.GetHeight();
-#endif
-}
-
-
-void ScalableBitmap::msw_rescale()
-{
-    m_bmp = create_scaled_bitmap(m_icon_name, m_parent, m_px_cnt);
+    m_bmp = *get_bmp_bundle(m_icon_name, m_bmp_width, m_bmp_height);
 }
 
 // ----------------------------------------------------------------------------
@@ -868,17 +728,23 @@ ScalableButton::ScalableButton( wxWindow *          parent,
                                 const wxString&     label /* = wxEmptyString*/,
                                 const wxSize&       size /* = wxDefaultSize*/,
                                 const wxPoint&      pos /* = wxDefaultPosition*/,
-                                long                style /*= wxBU_EXACTFIT | wxNO_BORDER*/) :
+                                long                style /*= wxBU_EXACTFIT | wxNO_BORDER*/,
+                                int                 width/* = 16*/, 
+                                int                 height/* = -1*/) :
+    m_parent(parent),
     m_current_icon_name(icon_name),
-    m_parent(parent)
+    m_bmp_width(width),
+    m_bmp_height(height),
+    m_has_border(!(style & wxNO_BORDER))
 {
     Create(parent, id, label, pos, size, style);
-#ifdef __WXMSW__
-    if (style & wxNO_BORDER)
-        SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
-#endif // __WXMSW__
+    Slic3r::GUI::wxGetApp().UpdateDarkUI(this);
 
-    SetBitmap(create_scaled_bitmap(icon_name, parent));
+    if (!icon_name.empty()) {
+        SetBitmap(*get_bmp_bundle(icon_name, width, height));
+        if (!label.empty())
+            SetBitmapMargins(int(0.5* em_unit(parent)), 0);
+    }
 
     if (size != wxDefaultSize)
     {
@@ -896,21 +762,44 @@ ScalableButton::ScalableButton( wxWindow *          parent,
                                 long                style /*= wxBU_EXACTFIT | wxNO_BORDER*/) :
     m_parent(parent),
     m_current_icon_name(bitmap.name()),
-    m_px_cnt(bitmap.px_cnt())
+    m_bmp_width(bitmap.px_size().x),
+    m_bmp_height(bitmap.px_size().y),
+    m_has_border(!(style& wxNO_BORDER))
 {
     Create(parent, id, label, wxDefaultPosition, wxDefaultSize, style);
-#ifdef __WXMSW__
-    if (style & wxNO_BORDER)
-        SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
-#endif // __WXMSW__
+    Slic3r::GUI::wxGetApp().UpdateDarkUI(this);
 
     SetBitmap(bitmap.bmp());
 }
 
 void ScalableButton::SetBitmap_(const ScalableBitmap& bmp)
 {
+    m_bmp_width = (bmp.px_size().x),
+    m_bmp_height = (bmp.px_size().y),
     SetBitmap(bmp.bmp());
     m_current_icon_name = bmp.name();
+}
+
+void ScalableButton::SetBitmap_(const wxBitmap& bmp)
+{
+    SetBitmap(bmp);
+}
+
+bool ScalableButton::SetBitmap_(const std::string& bmp_name, int bmp_width)
+{
+    m_current_icon_name = bmp_name;
+    if (m_current_icon_name.empty())
+        return false;
+
+    m_bmp_width = bmp_width;
+
+    wxBitmapBundle bmp = *get_bmp_bundle(m_current_icon_name, m_bmp_width, m_bmp_height);
+    SetBitmap(bmp);
+    SetBitmapCurrent(bmp);
+    SetBitmapPressed(bmp);
+    SetBitmapFocus(bmp);
+    SetBitmapDisabled(bmp);
+    return true;
 }
 
 void ScalableButton::SetBitmapDisabled_(const ScalableBitmap& bmp)
@@ -928,19 +817,144 @@ int ScalableButton::GetBitmapHeight()
 #endif
 }
 
-void ScalableButton::msw_rescale()
+void ScalableButton::sys_color_changed()
 {
-    SetBitmap(create_scaled_bitmap(m_current_icon_name, m_parent, m_px_cnt));
-    if (!m_disabled_icon_name.empty())
-        SetBitmapDisabled(create_scaled_bitmap(m_disabled_icon_name, m_parent, m_px_cnt));
+    Slic3r::GUI::wxGetApp().UpdateDarkUI(this, m_has_border);
 
-    if (m_width > 0 || m_height>0)
-    {
-        const int em = em_unit(m_parent);
-        wxSize size(m_width * em, m_height * em);
-        SetMinSize(size);
+    wxBitmapBundle bmp = *get_bmp_bundle(m_current_icon_name, m_bmp_width, m_bmp_height);
+        SetBitmap(bmp);
+        SetBitmapCurrent(bmp);
+        SetBitmapPressed(bmp);
+        SetBitmapFocus(bmp);
+        if (!m_disabled_icon_name.empty())
+        SetBitmapDisabled(*get_bmp_bundle(m_disabled_icon_name, m_bmp_width, m_bmp_height));
+    if (!GetLabelText().IsEmpty())
+        SetBitmapMargins(int(0.5 * em_unit(m_parent)), 0);
+}
+
+// ----------------------------------------------------------------------------
+// BlinkingBitmap
+// ----------------------------------------------------------------------------
+
+BlinkingBitmap::BlinkingBitmap(wxWindow* parent, const std::string& icon_name) :
+    wxStaticBitmap(parent, wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize(int(1.6 * Slic3r::GUI::wxGetApp().em_unit()), -1))
+{
+    bmp = ScalableBitmap(parent, icon_name);
+}
+
+void BlinkingBitmap::invalidate()
+{
+    this->SetBitmap(wxNullBitmap);
+}
+
+void BlinkingBitmap::activate()
+{
+    this->SetBitmap(bmp.bmp());
+    show = true;
+}
+
+void BlinkingBitmap::blink()
+{
+    show = !show;
+    this->SetBitmap(show ? bmp.bmp() : wxNullBitmap);
+}
+
+namespace Slic3r {
+namespace GUI {
+
+void Highlighter::set_timer_owner(wxWindow* owner, int timerid/* = wxID_ANY*/)
+{
+    m_timer.SetOwner(owner, timerid);
+    bind_timer(owner);
+}
+
+bool Highlighter::init(bool input_failed)
+{
+    if (input_failed)
+        return false;
+
+    m_timer.Start(300, false);
+    return true;
+}
+void Highlighter::invalidate()
+{
+    if (m_timer.IsRunning())
+        m_timer.Stop();
+    m_blink_counter = 0;
+}
+
+void Highlighter::blink()
+{
+    if ((++m_blink_counter) == 11)
+        invalidate();
+}
+
+// HighlighterForWx
+
+void HighlighterForWx::bind_timer(wxWindow* owner)
+{
+    owner->Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
+        blink();
+    });
+}
+
+// using OG_CustomCtrl where arrow will be rendered and flag indicated "show/hide" state of this arrow
+void HighlighterForWx::init(wxWindow* refresh_panel, bool* blink_bool)
+{
+    invalidate();
+    if (!Highlighter::init(!refresh_panel && !blink_bool))
+        return;
+
+    m_custom_ctrl = refresh_panel;
+    m_show_blink_ptr = blink_bool;
+
+    *m_show_blink_ptr = true;
+    m_custom_ctrl->Refresh();
+}
+
+// - using a BlinkingBitmap. Change state of this bitmap
+void HighlighterForWx::init(BlinkingBitmap* blinking_bmp)
+{
+    invalidate();
+    if (!Highlighter::init(!blinking_bmp))
+        return;
+
+    m_blinking_bitmap = blinking_bmp;
+    m_blinking_bitmap->activate();
+}
+
+void HighlighterForWx::invalidate()
+{
+    Highlighter::invalidate();
+
+    if (m_custom_ctrl && m_show_blink_ptr) {
+        *m_show_blink_ptr = false;
+        m_custom_ctrl->Refresh();
+        m_show_blink_ptr = nullptr;
+        m_custom_ctrl = nullptr;
+    }
+    else if (m_blinking_bitmap) {
+        m_blinking_bitmap->invalidate();
+        m_blinking_bitmap = nullptr;
     }
 }
+
+void HighlighterForWx::blink()
+{
+    if (m_custom_ctrl && m_show_blink_ptr) {
+        *m_show_blink_ptr = !*m_show_blink_ptr;
+        m_custom_ctrl->Refresh();
+    }
+    else if (m_blinking_bitmap)
+        m_blinking_bitmap->blink();
+    else
+        return;
+
+    Highlighter::blink();
+}
+
+}// GUI
+}//Slicer
 
 
 

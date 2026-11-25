@@ -1,3 +1,8 @@
+///|/ Copyright (c) Prusa Research 2017 - 2022 Vojtěch Bubník @bubnikv, Lukáš Matěna @lukasmatena
+///|/ Copyright (c) 2019 Thomas Moore
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 // Calculate extents of the extrusions assigned to Print / PrintObject.
 // The extents are used for assessing collisions of the print with the priming towers,
 // to decide whether to pause the print after the priming towers are extruded
@@ -6,6 +11,7 @@
 #include "../BoundingBox.hpp"
 #include "../ExtrusionEntity.hpp"
 #include "../ExtrusionEntityCollection.hpp"
+#include "../Layer.hpp"
 #include "../Print.hpp"
 
 #include "PrintExtents.hpp"
@@ -29,7 +35,7 @@ static inline BoundingBox extrusion_polyline_extents(const Polyline &polyline, c
 
 static inline BoundingBoxf extrusionentity_extents(const ExtrusionPath &extrusion_path)
 {
-    BoundingBox bbox = extrusion_polyline_extents(extrusion_path.polyline, coord_t(scale_(0.5 * extrusion_path.width)));
+    BoundingBox bbox = extrusion_polyline_extents(extrusion_path.polyline.to_polyline(), coord_t(scale_(0.5 * extrusion_path.width())));
     BoundingBoxf bboxf;
     if (! empty(bbox)) {
         bboxf.min = unscale(bbox.min);
@@ -43,7 +49,7 @@ static inline BoundingBoxf extrusionentity_extents(const ExtrusionLoop &extrusio
 {
     BoundingBox bbox;
     for (const ExtrusionPath &extrusion_path : extrusion_loop.paths)
-        bbox.merge(extrusion_polyline_extents(extrusion_path.polyline, coord_t(scale_(0.5 * extrusion_path.width))));
+        bbox.merge(extrusion_polyline_extents(extrusion_path.polyline.to_polyline(), coord_t(scale_(0.5 * extrusion_path.width()))));
     BoundingBoxf bboxf;
     if (! empty(bbox)) {
         bboxf.min = unscale(bbox.min);
@@ -57,7 +63,7 @@ static inline BoundingBoxf extrusionentity_extents(const ExtrusionMultiPath &ext
 {
     BoundingBox bbox;
     for (const ExtrusionPath &extrusion_path : extrusion_multi_path.paths)
-        bbox.merge(extrusion_polyline_extents(extrusion_path.polyline, coord_t(scale_(0.5 * extrusion_path.width))));
+        bbox.merge(extrusion_polyline_extents(extrusion_path.polyline.to_polyline(), coord_t(scale_(0.5 * extrusion_path.width()))));
     BoundingBoxf bboxf;
     if (! empty(bbox)) {
         bboxf.min = unscale(bbox.min);
@@ -72,7 +78,7 @@ static BoundingBoxf extrusionentity_extents(const ExtrusionEntity *extrusion_ent
 static inline BoundingBoxf extrusionentity_extents(const ExtrusionEntityCollection &extrusion_entity_collection)
 {
     BoundingBoxf bbox;
-    for (const ExtrusionEntity *extrusion_entity : extrusion_entity_collection.entities)
+    for (const ExtrusionEntity *extrusion_entity : extrusion_entity_collection.entities())
         bbox.merge(extrusionentity_extents(extrusion_entity));
     return bbox;
 }
@@ -93,7 +99,7 @@ static BoundingBoxf extrusionentity_extents(const ExtrusionEntity *extrusion_ent
     auto *extrusion_entity_collection = dynamic_cast<const ExtrusionEntityCollection*>(extrusion_entity);
     if (extrusion_entity_collection != nullptr)
         return extrusionentity_extents(*extrusion_entity_collection);
-    throw std::runtime_error("Unexpected extrusion_entity type in extrusionentity_extents()");
+    throw Slic3r::RuntimeError("Unexpected extrusion_entity type in extrusionentity_extents()");
     return BoundingBoxf();
 }
 
@@ -104,23 +110,30 @@ BoundingBoxf get_print_extrusions_extents(const Print &print)
     return bbox;
 }
 
-BoundingBoxf get_print_object_extrusions_extents(const PrintObject &print_object, const coordf_t max_print_z)
+BoundingBoxf get_print_object_extrusions_extents(const PrintObject &print_object, const coord_t max_print_z)
 {
     BoundingBoxf bbox;
     for (const Layer *layer : print_object.layers()) {
-        if (layer->print_z > max_print_z)
+        if (layer->scaled_print_z() > max_print_z)
             break;
         BoundingBoxf bbox_this;
-        for (const LayerRegion *layerm : layer->regions()) {
-            bbox_this.merge(extrusionentity_extents(layerm->perimeters));
-            for (const ExtrusionEntity *ee : layerm->fills.entities)
-                // fill represents infill extrusions of a single island.
-                bbox_this.merge(extrusionentity_extents(*dynamic_cast<const ExtrusionEntityCollection*>(ee)));
+        for (const LayerSliceIslandPtr &layer_island_ptr : layer->islands()) {
+            for (const LayerRegionIslandPtr &region_island_ptr : layer_island_ptr->regions_islands()) {
+                if (region_island_ptr->has_extrusion(LayerRegionIsland::PERIMETERS)) {
+                    bbox_this.merge(extrusionentity_extents(region_island_ptr->extrusion(LayerRegionIsland::PERIMETERS)));
+                }
+                if (region_island_ptr->has_extrusion(LayerRegionIsland::INFILLS)) {
+                    bbox_this.merge(extrusionentity_extents(region_island_ptr->extrusion(LayerRegionIsland::INFILLS)));
+                }
+                // 2 next take care of the case 'dynamic_cast<const SupportLayer*>(layer);'
+                if (region_island_ptr->has_extrusion(LayerRegionIsland::SUPPORT)) {
+                    bbox_this.merge(extrusionentity_extents(region_island_ptr->extrusion(LayerRegionIsland::SUPPORT)));
+                }
+                if (region_island_ptr->has_extrusion(LayerRegionIsland::SUPPORT_INTERFACE)) {
+                    bbox_this.merge(extrusionentity_extents(region_island_ptr->extrusion(LayerRegionIsland::SUPPORT_INTERFACE)));
+                }
+            }
         }
-        const SupportLayer *support_layer = dynamic_cast<const SupportLayer*>(layer);
-        if (support_layer)
-            for (const ExtrusionEntity *extrusion_entity : support_layer->support_fills.entities)
-                bbox_this.merge(extrusionentity_extents(extrusion_entity));
         for (const PrintInstance &instance : print_object.instances()) {
             BoundingBoxf bbox_translated(bbox_this);
             bbox_translated.translate(unscale(instance.shift));
@@ -132,17 +145,17 @@ BoundingBoxf get_print_object_extrusions_extents(const PrintObject &print_object
 
 // Returns a bounding box of a projection of the wipe tower for the layers <= max_print_z.
 // The projection does not contain the priming regions.
-BoundingBoxf get_wipe_tower_extrusions_extents(const Print &print, const coordf_t max_print_z)
+BoundingBoxf get_wipe_tower_extrusions_extents(const Print &print, const coord_t max_print_z)
 {
     // Wipe tower extrusions are saved as if the tower was at the origin with no rotation
     // We need to get position and angle of the wipe tower to transform them to actual position.
     Transform2d trafo =
-        Eigen::Translation2d(print.config().wipe_tower_x.value, print.config().wipe_tower_y.value) *
-        Eigen::Rotation2Dd(Geometry::deg2rad(print.config().wipe_tower_rotation_angle.value));
+        Eigen::Translation2d(print.default_object_config().wipe_tower_x.value, print.default_object_config().wipe_tower_y.value) *
+        Eigen::Rotation2Dd(Geometry::deg2rad(print.default_object_config().wipe_tower_rotation_angle.value));
 
     BoundingBoxf bbox;
     for (const std::vector<WipeTower::ToolChangeResult> &tool_changes : print.wipe_tower_data().tool_changes) {
-        if (! tool_changes.empty() && tool_changes.front().print_z > max_print_z)
+        if (! tool_changes.empty() && Layer::scale_to_layer_coord(tool_changes.front().print_z) > max_print_z)
             break;
         for (const WipeTower::ToolChangeResult &tcr : tool_changes) {
             for (size_t i = 1; i < tcr.extrusions.size(); ++ i) {

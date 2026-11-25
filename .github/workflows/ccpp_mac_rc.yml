@@ -1,0 +1,155 @@
+name: C/C++ Release candidate macos
+
+on:
+  push:
+    branches:
+      - rc-macintel
+  workflow_dispatch:
+  # Called by ci_rc.yml (branch rc, no release files) and release_rc.yml (version tag,
+  # stage_release). Publication to the draft is done by release_rc.yml, not here.
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      stage_release:
+        description: Stage the release files and their manifest for the draft publisher
+        type: boolean
+        default: false
+      product:
+        description: Release product name, required with stage_release
+        type: string
+        default: ''
+      release_version:
+        description: Full release version, required with stage_release
+        type: string
+        default: ''
+    outputs:
+      release_artifact_id:
+        description: ID of the staged release files (empty unless stage_release)
+        value: ${{ jobs.build.outputs.release_artifact_id }}
+
+permissions:
+  contents: read
+
+jobs:
+  build_dep:
+    runs-on: macos-15-intel
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.source_sha || github.sha }}
+        persist-credentials: false
+    - name: New cmake
+      run: cmake --version
+    - name: Setup cmake
+      uses: jwlawson/actions-setup-cmake@v2
+      with:
+        cmake-version: "3.31.x"
+    - name: Use cmake
+      run: cmake --version
+    - name: Install Autoconf
+      run: |
+        brew update
+        brew install autoconf
+    - name: check autoconf version
+      run: autoconf --version
+    - name: update automake for mpfr
+      run: |
+        curl -O -L https://github.com/supermerill/SuperSlicer_deps/releases/download/automake/automake-1.16.5.tar.gz
+        tar -xzf automake-1.16.5.tar.gz
+        cd automake-*
+        ./configure
+        make
+        sudo make install
+        automake --version
+    - name: Install makeinfo
+      run: brew install texinfo
+    - name: mkdir in deps
+      run: mkdir deps/build
+    - name: dep cache
+      id: cache-action
+      uses: actions/cache@v4
+      with:
+        key: macos_intel_2.7.63
+        path: deps/build/destdir
+    - if: steps.cache-action.outputs.cache-hit != 'true'
+      name: build deps if new cache
+      run: ./BuildMacOS.sh -d
+
+  build:
+    runs-on: macos-15-intel
+    needs: build_dep
+    outputs:
+      release_artifact_id: ${{ steps.release-artifact.outputs.artifact-id }}
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.source_sha || github.sha }}
+        persist-credentials: false
+    - name: New cmake
+      run: cmake --version
+    - name: Setup cmake
+      uses: jwlawson/actions-setup-cmake@v2
+      with:
+        cmake-version: "3.31.x"
+    - name: Use cmake
+      run: cmake --version
+    - name: Install Autoconf
+      run: |
+        brew update
+        brew install autoconf
+    - name: check autoconf version
+      run: autoconf --version
+    - name: update automake for mpfr
+      run: |
+        curl -O -L https://github.com/supermerill/SuperSlicer_deps/releases/download/automake/automake-1.16.5.tar.gz
+        tar -xzf automake-1.16.5.tar.gz
+        cd automake-*
+        ./configure
+        make
+        sudo make install
+        automake --version
+    - name: Install makeinfo
+      run: brew install texinfo
+    - name: dep cache
+      id: cache-action
+      uses: actions/cache@v4
+      with:
+        key: macos_intel_2.7.63
+        path: deps/build/destdir
+    - name: build slicer
+      run: ./BuildMacOS.sh -si
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: rc_${{ github.event.repository.name }}-macOS-intel.tgz
+        path: build/${{ github.event.repository.name }}-macOS-intel.tgz
+        if-no-files-found: error
+        overwrite: true
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: rc_${{ github.event.repository.name }}-macOS-intel.dmg
+        path: build/${{ github.event.repository.name }}-macOS-intel.dmg
+        if-no-files-found: error
+        overwrite: true
+    - name: Stage named release files and integrity manifest
+      if: inputs.stage_release
+      env:
+        RELEASE_SHA: ${{ inputs.source_sha }}
+        RELEASE_VERSION: ${{ inputs.release_version }}
+        PRODUCT: ${{ inputs.product }}
+      run: >-
+        python3 .github/scripts/release.py stage --platform macos-intel
+        --source-sha "$RELEASE_SHA" --version "$RELEASE_VERSION" --product "$PRODUCT"
+    - name: Upload exact files for the draft publisher
+      id: release-artifact
+      if: inputs.stage_release
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-macos-intel-${{ github.run_attempt }}
+        path: release-assets/
+        if-no-files-found: error

@@ -1,118 +1,104 @@
-name: C/C++ CI macos
+name: C/C++ Nightly macos
 
 on:
   push:
     branches:
-      - CI
+      - Nigthly
+      - nightly_dev
+      - nightly_master
+      - nightly_macos_intel
+      - nightly_2.7.63
+      - debug_macos
 
 jobs:
-  build:
+  build_dep:
+    runs-on: macos-15-intel
 
-    runs-on: macos-latest
-    
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
+    - name: New cmake
+      run: cmake --version
+    - name: Setup cmake
+      uses: jwlawson/actions-setup-cmake@v2
       with:
-        ref: 'CI'
-    - name: change date in version
+        cmake-version: "3.31.x"
+    - name: Use cmake
+      run: cmake --version
+    - name: Install Autoconf
       run: |
-        sed "s/+UNKNOWN/_$(date '+%F')/" version.inc > version.date.inc
-        mv version.date.inc version.inc
+        brew update
+        brew install autoconf
+    - name: check autoconf version
+      run: autoconf --version
+    - name: update automake for mpfr
+      run: |
+        curl -O -L https://github.com/supermerill/SuperSlicer_deps/releases/download/automake/automake-1.16.5.tar.gz
+        tar -xzf automake-1.16.5.tar.gz
+        cd automake-*
+        ./configure
+        make
+        sudo make install
+        automake --version
+    - name: Install makeinfo
+      run: brew install texinfo
     - name: mkdir in deps
       run: mkdir deps/build
-    - name: cmake deps
-      working-directory: ./deps/build
-      run: cmake .. -DCMAKE_OSX_DEPLOYMENT_TARGET="10.13"
-    - name: make deps
-      working-directory: ./deps/build
-      run: make
-    - name: ls libs
-      working-directory: ./deps/build
-      run: ls ./destdir/usr/local/lib
-    - name: rename wxscintilla
-      working-directory: ./deps/build/destdir/usr/local/lib
-      run: cp libwxscintilla-3.1.a libwx_osx_cocoau_scintilla-3.1.a
-    - name: ls libs
-      working-directory: ./deps/build
-      run: ls ./destdir/usr/local/lib
-    - name: clean deps
-      working-directory: ./deps/build
-      run: rm -rf dep_*
-    - name: mkdir build
-      run: mkdir build
-    - name: cmake
-      working-directory: ./build
-      run: cmake .. -DCMAKE_PREFIX_PATH="$PWD/../deps/build/destdir/usr/local" -DCMAKE_OSX_DEPLOYMENT_TARGET="10.13" -DSLIC3R_STATIC=1
-    - name: make slic3r
-      working-directory: ./build
-      run: make slic3r
-    - name: update Info.plist
-      working-directory: ./build/src
-      run: sed "s/+UNKNOWN/_$(date '+%F')/" Info.plist >Info.date.plist
-    - name: create directory and copy into it
-      working-directory: ./build
-      run: |
-        mkdir SuperSlicer
-        mkdir SuperSlicer/SuperSlicer.app
-        mkdir SuperSlicer/SuperSlicer.app/Contents
-        mkdir SuperSlicer/SuperSlicer.app/Contents/_CodeSignature
-        mkdir SuperSlicer/SuperSlicer.app/Contents/Frameworks
-        mkdir SuperSlicer/SuperSlicer.app/Contents/MacOS
-    - name: copy resources
-      working-directory: ./build
-      run: |
-        cp -Rf ../resources SuperSlicer/SuperSlicer.app/Contents/resources
-        cp SuperSlicer/SuperSlicer.app/Contents/resources/icons/slic3r.icns SuperSlicer/SuperSlicer.app/Contents/resources/Slic3r.icns
-        cp src/Info.date.plist SuperSlicer/SuperSlicer.app/Contents/Info.plist
-        echo -n -e 'APPL????\x0a' > PkgInfo
-        cp PkgInfo SuperSlicer/SuperSlicer.app/Contents/PkgInfo
-#        echo -n -e '\xff\xfeAPPL\x3f\x00\x3f\x00\x3f\x00\x3f\x00\x0a\x00' > PkgInfo
-    - name: copy bin and do not let it lower case
-      working-directory: ./build
-      run: |
-        cp -f src/superslicer SuperSlicer/SuperSlicer.app/Contents/MacOS/SuperSlicer
-        chmod u+x SuperSlicer/SuperSlicer.app/Contents/MacOS/SuperSlicer
-        tar -cvf SuperSlicer.tar SuperSlicer
-    - name: create dmg
-      working-directory: ./build
-      run: |
-        hdiutil create -ov -fs HFS+ -volname "SuperSlicer" -srcfolder "SuperSlicer" temp.dmg
-        hdiutil convert temp.dmg -format UDZO -o SuperSlicer.dmg
-#    - name: signing resources (creating CodeResources inside _CodeSignature)
-#      working-directory: .
-#      run: codesign -s <identity> resources
-# maybe i should just try to do that on a separate pc and copy the file here, more secure as a signing process.
-    - name: Upload artifact
-      uses: actions/upload-artifact@v1.0.0
+    - name: dep cache
+      id: cache-action
+      uses: actions/cache@v3
       with:
-        name: nightly_macos.tar
-        path: build/SuperSlicer.tar
-    - name: Upload artifact
-      uses: actions/upload-artifact@v1.0.0
+        key: macos_intel_2.7.63
+        path: deps/build/destdir
+    - if: steps.cache-action.outputs.cache-hit != 'true'
+      name: build deps if new cache
+      run: ./BuildMacOS.sh -d
+
+  build:
+    runs-on: macos-15-intel
+    needs: build_dep
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: New cmake
+      run: cmake --version
+    - name: Setup cmake
+      uses: jwlawson/actions-setup-cmake@v2
       with:
-        name: nightly_macos.dmg
-        path: build/SuperSlicer.dmg
-# build again, but the debug one this time
-    - name: cmake
-      working-directory: ./build
-      run: cmake .. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH="$PWD/../deps/build/destdir/usr/local" -DCMAKE_OSX_DEPLOYMENT_TARGET="10.13" -DSLIC3R_STATIC=1
-    - name: make slic3r
-      working-directory: ./build
-      run: make slic3r
-    - name: copy bin and do not let it lower case
-      working-directory: ./build
+        cmake-version: "3.31.x"
+    - name: Use cmake
+      run: cmake --version
+    - name: Install Autoconf
       run: |
-        cp -f src/superslicer SuperSlicer/SuperSlicer.app/Contents/MacOS/SuperSlicer
-        chmod u+x SuperSlicer/SuperSlicer.app/Contents/MacOS/SuperSlicer
-        tar -cvf SuperSlicer.tar SuperSlicer
-    - name: create dmg
-      working-directory: ./build
+        brew update
+        brew install autoconf
+    - name: check autoconf version
+      run: autoconf --version
+    - name: update automake for mpfr
       run: |
-        rm SuperSlicer.dmg
-        hdiutil create -ov -fs HFS+ -volname "SuperSlicer" -srcfolder "SuperSlicer" temp.dmg
-        hdiutil convert temp.dmg -format UDZO -o SuperSlicer.dmg
-    - name: Upload artifact
-      uses: actions/upload-artifact@v1.0.0
+        curl -O -L http://ftpmirror.gnu.org/automake/automake-1.16.5.tar.gz
+        tar -xzf automake-1.16.5.tar.gz
+        cd automake-*
+        ./configure
+        make
+        sudo make install
+        automake --version
+    - name: Install makeinfo
+      run: brew install texinfo
+    - name: dep cache
+      id: cache-action
+      uses: actions/cache@v3
       with:
-        name: nightly_macos_DEBUG.dmg
-        path: build/SuperSlicer.dmg
+        key: macos_intel_2.7.63
+        path: deps/build/destdir
+    - name: build slicer
+      run: ./BuildMacOS.sh -siv
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly_${{ github.event.repository.name }}-macOS-intel.tgz
+        path: build/${{ github.event.repository.name }}-macOS-intel.tgz
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: nightly_${{ github.event.repository.name }}-macOS-intel.dmg
+        path: build/${{ github.event.repository.name }}-macOS-intel.dmg

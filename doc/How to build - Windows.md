@@ -1,169 +1,121 @@
-
-# Building SuperSlicer on Microsoft Windows
-
-The currently supported way of building SuperSlicer on Windows is with CMake and MS Visual Studio 2017.
-You can use the free [Visual Studio 2017 Community Edition](https://www.visualstudio.com/vs/older-downloads/).
-CMake installer can be downloaded from [the official website](https://cmake.org/download/).~~
-
-Building with newer versions of MSVS (2019) should work too.
+# Building PrusaSlicer on Windows
 
 
-### Building the dependencies package yourself
+## 0. Prerequisities
 
-The dependencies package is built using CMake scripts inside the `deps` subdirectory of SuperSlicer sources.
-(This is intentionally not interconnected with the CMake scripts in the rest of the sources.)
+The following tools need to be installed on your computer:
+- Microsoft Visual Studio version 16 2019 or 17 2022
+- CMake
+- git
 
-Open the preferred Visual Studio command line (64 or 32 bit variant, or just a cmd window) and `cd` into the directory with SuperSlicer sources.
-Then `cd` into the `deps` directory and use these commands to build:
-
-    mkdir build
-    cd build
-    cmake .. -G "Visual Studio 15 Win64" -DDESTDIR="C:\local\destdir-custom"
-    msbuild /m ALL_BUILD.vcxproj
-	
-You can also use the Visual Studio GUI or other generators as mentioned below.
-
-Note that if you're building a 32-bit variant, you will need to change the `"Visual Studio 15 Win64"` to just `"Visual Studio 15"`.
-
-Conversely, if you're using Visual Studio version other than 2017, the version number will need to be changed accordingly (-G "Visual Studio 16 2019" -A "x64" for Visual Studio 2019 Community).
-
-The `DESTDIR` option is the location where the bundle will be installed.
-This may be customized. If you leave it empty, the `DESTDIR` will be placed inside the same `build` directory.
-
-Warning: If the `build` directory is nested too deep inside other folders, various file paths during the build become too long and the build might fail due to file writing errors (\*). For this reason, it is recommended to place the `build` directory relatively close to the drive root.
-
-Note that the build variant that you may choose using Visual Studio (i.e. _Release_ or _Debug_ etc.) when building the dependency package is **not relevant**.
-The dependency build will by default build _both_ the _Release_ and _Debug_ variants regardless of what you choose in Visual Studio.
-You can disable building of the debug variant by passing the
-
-    -DDEP_DEBUG=OFF
-
-option to CMake, this will only produce a _Release_ build.
-
-Refer to the CMake scripts inside the `deps` directory to see which dependencies are built in what versions and how this is done.
-
-* Specifically, the problem arises when building boost. Boost build tool appends all build options into paths of intermediate files, which are not handled correctly by either `b2.exe` or possibly `ninja` (?).
+Install git for Windows from [gitforwindows.org](https://gitforwindows.org/)
+If you haven't, I advise to use a gui like tortoisegit.
+Download and run the exe accepting all defaults
 
 
-### Building SuperSlicer with Visual Studio
-
-First obtain the SuperSlicer sources via either git or by extracting the source archive.
-
-Then you will need to note down the so-called 'prefix path' to the dependencies, this is the location of the dependencies packages + `\usr\local` appended.
-
-When ready, open the relevant Visual Studio command line and `cd` into the directory with SuperSlicer sources.
-Use these commands to prepare Visual Studio solution file:
-
-    mkdir build
-    cd build
-    cmake .. -G "Visual Studio 15 Win64" -DCMAKE_PREFIX_PATH="C:\local\destdir-custom\usr\local"
-
-Note that the '-G "Visual Studio 15 Win64"' have to be the same as the one you sue for building the dependencies. So replace it the same way your replace it when you built the dependencies (if you did).
-
-If `cmake` has finished without errors, go to the build directory and open the `SuperSlicer.sln` solution file in Visual Studio.
-Before building, make sure you're building the right project (use one of those starting with `SuperSlicer_app_...`) and that you're building with the right configuration, i.e. _Release_ vs. _Debug_. When unsure, choose _Release_.
-Note that you won't be able to build a _Debug_ variant against a _Release_-only dependencies package.
-
-#### Installing using the `INSTALL` project
-
-SuperSlicer can be run from the Visual Studio or from Visual Studio's build directory (`src\Release` or `src\Debug`), but for longer-term usage you might want to install somewhere using the `INSTALL` project.
-By default, this installs into `C:\Program Files\SuperSlicer`.
-To customize the install path, use the `-DCMAKE_INSTALL_PREFIX=<path of your choice>` when invoking `cmake`.
-
-### Building from the command line
-
-There are several options for building from the command line:
-
-- [msbuild](https://docs.microsoft.com/en-us/visualstudio/msbuild/msbuild-reference?view=vs-2017&viewFallbackFrom=vs-2013)
-- [Ninja](https://ninja-build.org/)
-- [nmake](https://docs.microsoft.com/en-us/cpp/build/nmake-reference?view=vs-2017)
-
-To build with msbuild, use the same CMake command as in previous paragraph and then build using
-
-    msbuild /m /P:Configuration=Release ALL_BUILD.vcxproj
-
-To build with Ninja or nmake, replace the `-G` option in the CMake call with `-G Ninja` or `-G "NMake Makefiles"` , respectively.
-Then use either `ninja` or `nmake` to start the build.
-
-To install, use `msbuild /P:Configuration=Release INSTALL.vcxproj` , `ninja install` , or `nmake install` .
-
-### Building the dependencies package yourself
-
-The dependencies package is built using CMake scripts inside the `deps` subdirectory of PrusaSlicer sources.
-(This is intentionally not interconnected with the CMake scripts in the rest of the sources.)
-
-Open the preferred Visual Studio command line (64 or 32 bit variant) and `cd` into the directory with PrusaSlicer sources.
-Then `cd` into the `deps` directory and use these commands to build:
-
-    mkdir build
-    cd build
-    cmake .. -G "Visual Studio 12 Win64" -DDESTDIR="C:\local\destdir-custom"
-    msbuild /m ALL_BUILD.vcxproj
-
-You can also use the Visual Studio GUI or other generators as mentioned above.
-
-The `DESTDIR` option is the location where the bundle will be installed.
-This may be customized. If you leave it empty, the `DESTDIR` will be placed inside the same `build` directory.
-
-Warning: If the `build` directory is nested too deep inside other folders, various file paths during the build
-become too long and the build might fail due to file writing errors (\*). For this reason, it is recommended to
-place the `build` directory relatively close to the drive root.
-
-Note that the build variant that you may choose using Visual Studio (i.e. _Release_ or _Debug_ etc.) when building the dependency package is **not relevant**.
-The dependency build will by default build _both_ the _Release_ and _Debug_ variants regardless of what you choose in Visual Studio.
-You can disable building of the debug variant by passing the
-
-    -DDEP_DEBUG=OFF
-
-option to CMake, this will only produce a _Release_ build.
-
-Refer to the CMake scripts inside the `deps` directory to see which dependencies are built in what versions and how this is done.
-
-\*) Specifically, the problem arises when building boost. Boost build tool appends all build options into paths of
-intermediate files, which are not handled correctly by either `b2.exe` or possibly `ninja` (?).
+Clone the respository.  To place it in C:\src\REPO_NAME (use Slic3r, SuperSlicer or PrusaSlicer as REPO_NAME), run:
+```
+c:> mkdir src
+c:> cd src
+c:\src> git clone https://github.com/supermerill/SuperSlicer.git
+```
 
 
-# Noob guide (step by step)
+## 1. Download sources
 
-Install Visual Studio Community 2019 from
-visualstudio.microsoft.com/vs/
-Select all workload options for C++ 
+Clone the respository. Use a directory relatively close to the drive root, so the path is not too long. Avoid spaces and non-ASCII characters. To place it in `C:\local\Slic3r`, run:
+```
+c:> mkdir src
+c:> cd src
+c:\src> git clone https://github.com/Slic3r/Slic3r.git
+```
 
-Install git for Windows from
-gitforwindows.org
-download and run the exe accepting all defaults
 
-download PrusaSlicer-master.zip from github
-I downloaded this to c:\PrusaSlicer and unzipped to c:\PrusaSlicer\PrusaSlicer-master\ so this will be my prefix for all my steps. Substitute your prefix.
+## 2.A Manual Build Instructions
 
-Go to the Windows Start Menu and Click on "Visual Studio 2019" folder, then select the ->"x64 Native Tools Command Prompt" to open a command window
+c:\src>cd c:\local\Slic3r
+c:\local\Slic3r>build_win.bat -d=..\PrusaSlicer-deps -r=console
+_As an alternative, you can go to 2.B to compile PrusaSlicer using one automatic script._
 
-cd c:\PrusaSlicer\PrusaSlicer-master\deps
-
+1. Configure and build [deps](#compile-the-dependencies) as RelWithDebInfo with `c:\local\Slic3r-deps` as the destination directory
+### Compile the dependencies.
+Dependencies are updated seldomly, thus they are compiled out of the Slic3r source tree.
+Open the MSVC x64 Native Tools Command Prompt and run the following:
+```
+cd c:\local\Slic3r\deps
 mkdir build
-
 cd build
+cmake ..
+cmake --build .
+```
+Expect this to take some time. Note that both _Debug_ and _Release_ variants are built.
+If you need to compile with a specific version of visual studio, add this option to the first CMake call `-G "Visual Studio 16 2022"`
+If you want to compile in another place than C:\local\Slic3r\deps\usr\local, add this �ption to the first CMake call: ` -DDESTDIR="c:\local\Slic3-deps"`
+ You can force only the _Release_ build by passing `-DDEP_DEBUG=OFF` to the first CMake call.
 
-cmake .. -G "Visual Studio 16 2019" -DDESTDIR="c:\PrusaSlicer\PrusaSlicer-master"
+note: if you have visual studio 2022 installed alongside 2017/2019, you may have to comment/remove the lines 20->31 in `dep_Boost-prefix/src/dep_Boosttools/build/src/engine/vswhere_usability_wrapper.cmd` (after first failing to compile) to force it to ignore vs2022.
 
-msbuild /m ALL_BUILD.vcxproj // This took 13.5 minutes on my machine: core I7-7700K @ 4.2Ghz with 32GB main memory and 20min on a average laptop
-
-cd c:\PrusaSlicer\PrusaSlicer-master\
-
+### Generate Visual Studio project file for Slic3r, referencing the precompiled dependencies.
+Open the MSVC x64 Native Tools Command Prompt and run the following:
+```
+cd c:\local\Slic3r\
+cd c:\src\REPO_NAME\
 mkdir build
-
 cd build
+cmake .. -DCMAKE_PREFIX_PATH="c:\local\Slic3r\deps\build\destdir\usr\local"
+```
 
-cmake .. -G "Visual Studio 16 2019" -DCMAKE_PREFIX_PATH="c:\PrusaSlicer\PrusaSlicer-master\usr\local"
+Note that `CMAKE_PREFIX_PATH` must be absolute path. A relative path will not work.
+If you set yourself the DESTDIR for the deps, write your location instead of `c:\local\Slic3r\deps\build\destdir\usr\local`
+If you need to compile with a specific version of visual studio, add this option to the first CMake call `-G "Visual Studio 16 2022"`. Use the same version as the deps.
 
-open Visual Studio for c++ development (VS asks this the first time you start it)
+If it complains about not finding PSAPI, you cans et yourself the value in your cmakcache. Search your computer for 'psapi.lib'. For exemple, mine is at "C:/Program Files (x86)/Windows Kits/10/Lib/10.0.22621.0/um/x64/psapi.lib".
 
-Open->Project/Solution or File->Open->Project/Solution (depending on which dialog comes up first)
+### Compile Slic3r. 
 
-click on c:\PrusaSlicer\PrusaSlicer-master\build\PrusaSlicer.sln
+Double-click c:\local\Slic3r\build\PrusaSlicer.sln to open in Visual Studio 2019.
+Double-click c:\local\Slic3r\build\Slic3r.sln to open in Visual Studio and select `Slic3r_app_gui` as your startup project (right-click->Set as Startup Project).
 
-Debug->Start Debugging or Debug->Start Without debugging
-PrusaSlicer should start. You're up and running!
+Run Build->Rebuild Solution once to populate all required dependency modules. This is NOT done automatically when you Build/Run. If you run both Debug and Release variants, you will need to do this once for each.
+
+Debug->Start Debugging or press F5
+
+Slic3r should start. You're up and running!
 
 
-note: Thanks to @douggorgen for the original guide, as an answer for a issue 
+
+
+## 2.B Run the automatic build script
+
+_This is an alternative to the manual build described above. It relies on `build_win.bat` script which is part of the repository and which will find the MSVC installation, set up the build environment and build the dependencies and Slic3r itself. The script was provided by @jschuh and PrusaSlicer team does not maintain it._
+
+Just run the following command to get everything going with the default configs:
+
+```
+c:\src>cd c:\local\Slic3r
+c:\local\Slic3r>build_win.bat -d=..\Slic3r-deps -r=console
+```
+
+The build script will run for a while and automatically perform the following steps:
+1. Configure and build [deps](#compile-the-dependencies) as RelWithDebInfo with `c:\local\Slic3r-deps` as the destination directory
+2. Configure and build all [application targets](#compile-slic3r) as RelWithDebInfo
+3. Launch the resulting `slic3r-console.exe` binary
+
+You can change the above command line options to do things like:
+* Change the destination for the dependencies by pointing `-d` to a different directory such as: `build_win.bat -d=s:\Slic3rDeps`
+* Open the solution in Visual Studio after the build completes by changing the `-r` switch to `-r=ide`
+* Generate a release build without debug info by adding `-c=Release` or a full debug build with `-c=Debug`
+* Perform an incremental application build (the default) with: `build_win.bat -s=app-dirty`
+* Clean and rebuild the application: `build_win.bat -s=app`
+* Clean and rebuild the dependencies: `build_win.bat -s=deps`
+* Clean and rebuild everything (app and deps): `build_win.bat -s=all`
+* _The full list of build script options can be listed by running:_ `build_win.bat -?`
+
+#### Troubleshooting
+
+You're best off initiating builds from within Visual Studio for day-to-day development. However, the `build_win.bat` script can be very helpful if you run into build failures after updating your source tree. Here are some tips to keep in mind:
+* The last several lines of output from `build_win.bat` will usually have the most helpful error messages.
+* If CMake complains about missing binaries or paths (e.g. after updating Visual Studio), building with `build_win.bat` will force CMake to regenerate its cache on an error.
+* After a deps change, you may just need to rebuild everything with the `-s=all` switch.
+* Reading through the instructions in the next section may help diagnose more complex issues.
+
