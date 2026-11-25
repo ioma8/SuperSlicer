@@ -6,20 +6,16 @@
 #include <regex>
 
 #include "GUI_App.hpp"
-#include "GUI_Utils.hpp"
-#include "MainFrame.hpp"
-#include "wxExtensions.hpp"
-#include <wx/wx.h>
-#include <wx/stc/stc.h>
-#include <wx/html/htmlwin.h>
-#include <wx/textctrl.h>
+
+#include <wx/combobox.h>
 #include <wx/gbsizer.h>
-#include <boost/process.hpp>
-#include <boost/asio.hpp>
+#include <wx/stc/stc.h>
 
 namespace Slic3r { 
 namespace GUI {
 
+//can't be defeined here, so it will be defined in cpp (because of include sheanigans)
+class ExecVar;
 
 enum PyCommandType : uint16_t {
     pctNONE = 0x0,
@@ -49,7 +45,7 @@ class FreeCADDialog : public DPIDialog
 
 public:
     FreeCADDialog(GUI_App* app, MainFrame* mainframe);
-    virtual ~FreeCADDialog() { }
+    virtual ~FreeCADDialog();
     
 protected:
     void close_me(wxCommandEvent& event_args);
@@ -68,10 +64,12 @@ protected:
     void on_word_change_for_autocomplete(wxStyledTextEvent& event);
     void on_char_add(wxStyledTextEvent& event);
     void on_key_type(wxKeyEvent& event);
+    void on_char_type(wxKeyEvent& event);
     void on_autocomp_complete(wxStyledTextEvent& event);
     bool write_text_in_file(const wxString &towrite, const boost::filesystem::path &file);
     bool load_text_from_file(const boost::filesystem::path &file);
     void test_update_script_file(std::string &json);
+    void comment(bool is_switch);
 
     wxStyledTextCtrl* m_text;
     wxTextCtrl* m_errors;
@@ -79,6 +77,7 @@ protected:
     MainFrame* main_frame;
     GUI_App* gui_app;
     wxGridBagSizer* main_sizer;
+    wxComboBox* cmb_add_replace;
 
     std::vector<PyCommand> commands;
 
@@ -86,14 +85,7 @@ protected:
     bool update_done = false;
 
     boost::filesystem::path opened_file;
-    struct ExecVar {
-        boost::process::opstream pyin;
-        boost::asio::io_service ios;
-        std::future<std::string> data_out;
-        std::future<std::string> data_err;
-        std::unique_ptr<boost::process::child> process;
-    };
-    std::unique_ptr<ExecVar> exec_var;
+    ExecVar* exec_var = nullptr;
 
     bool ready = false;
 

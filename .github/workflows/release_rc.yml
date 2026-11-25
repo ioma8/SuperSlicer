@@ -1,0 +1,267 @@
+name: RC release orchestrator
+
+# Only the push that creates a version tag (n.n.n.n or n.n.n.n-suffix) prepares a draft
+# release: the tag must equal version.inc and point at the pushed commit. CI never
+# creates, moves or deletes a tag. Branch rc builds are in ci_rc.yml.
+on:
+  push:
+    tags: ['*.*.*.*']
+
+permissions:
+  contents: read
+
+# One run per tag at a time; two different tags do not block each other.
+concurrency:
+  group: rc-release-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    name: Offline release tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # In a job without write access: the workflow contract tests need PyYAML.
+      - name: Install PyYAML
+        run: python -m pip install --disable-pip-version-check PyYAML==6.0.2
+      - name: Test release logic offline before any GitHub write
+        run: |
+          python -c "import yaml"
+          python -B -m unittest discover -s .github/scripts/tests -v
+
+  prepare:
+    name: Release / prepare
+    needs: tests
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      product: ${{ steps.release.outputs.product }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      source_sha: ${{ steps.release.outputs.source_sha }}
+      release_id: ${{ steps.release.outputs.release_id }}
+      windows: ${{ steps.release.outputs.windows }}
+      macos_intel: ${{ steps.release.outputs.macos_intel }}
+      macos_arm: ${{ steps.release.outputs.macos_arm }}
+      linux_gtk3: ${{ steps.release.outputs.linux_gtk3 }}
+      linux_gtk2: ${{ steps.release.outputs.linux_gtk2 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check the tag push and prepare the draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/release.py prepare --output "$GITHUB_OUTPUT"
+
+  # ---- Windows: signing check, compilation, production signing and packaging ----
+  windows_signing:
+    name: Windows / signing check
+    needs: prepare
+    if: needs.prepare.outputs.windows == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Require production signing before compiling
+        env:
+          SIGNPATH_ENABLED: ${{ vars.SIGNPATH_ENABLED }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG || 'superslicer' }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+        run: |
+          if [ "$SIGNPATH_ENABLED" != 'true' ]; then
+            echo '::error::Windows release files require SIGNPATH_ENABLED=true and a valid production certificate. Nothing unsigned is published.'
+            exit 1
+          fi
+          for name in SIGNPATH_ORGANIZATION_ID SIGNPATH_PROJECT_SLUG SIGNPATH_SIGNING_POLICY_SLUG; do
+            value="${!name}"
+            if [ -z "${value//[[:space:]]/}" ]; then echo "::error::Missing $name. See .github/signpath/README.md."; exit 1; fi
+          done
+
+  windows_build:
+    name: Windows
+    needs: [prepare, windows_signing]
+    uses: ./.github/workflows/windows_build.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      mode: rc
+
+  windows_package:
+    name: Windows
+    needs: [prepare, windows_build]
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/windows_package.yml
+    with:
+      artifact_id: ${{ needs.windows_build.outputs.artifact_id }}
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      mode: rc
+      signing: production
+      stage_release: true
+      product: ${{ needs.prepare.outputs.product }}
+      release_version: ${{ needs.prepare.outputs.version }}
+    secrets:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+
+  publish_windows:
+    name: Windows
+    needs: [prepare, windows_package]
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release_upload.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      release_version: ${{ needs.prepare.outputs.version }}
+      release_id: ${{ needs.prepare.outputs.release_id }}
+      product: ${{ needs.prepare.outputs.product }}
+      platform: windows
+      artifact_id: ${{ needs.windows_package.outputs.release_artifact_id }}
+
+  # ---- macOS and Linux: one build and one publisher per target ----
+  macos_intel:
+    name: macOS Intel
+    needs: prepare
+    if: needs.prepare.outputs.macos_intel == 'true'
+    uses: ./.github/workflows/ccpp_mac_rc.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      stage_release: true
+      product: ${{ needs.prepare.outputs.product }}
+      release_version: ${{ needs.prepare.outputs.version }}
+
+  publish_macos_intel:
+    name: macOS Intel
+    needs: [prepare, macos_intel]
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release_upload.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      release_version: ${{ needs.prepare.outputs.version }}
+      release_id: ${{ needs.prepare.outputs.release_id }}
+      product: ${{ needs.prepare.outputs.product }}
+      platform: macos-intel
+      artifact_id: ${{ needs.macos_intel.outputs.release_artifact_id }}
+
+  macos_arm:
+    name: macOS ARM
+    needs: prepare
+    if: needs.prepare.outputs.macos_arm == 'true'
+    uses: ./.github/workflows/ccpp_mac_arm_rc.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      stage_release: true
+      product: ${{ needs.prepare.outputs.product }}
+      release_version: ${{ needs.prepare.outputs.version }}
+
+  publish_macos_arm:
+    name: macOS ARM
+    needs: [prepare, macos_arm]
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release_upload.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      release_version: ${{ needs.prepare.outputs.version }}
+      release_id: ${{ needs.prepare.outputs.release_id }}
+      product: ${{ needs.prepare.outputs.product }}
+      platform: macos-arm
+      artifact_id: ${{ needs.macos_arm.outputs.release_artifact_id }}
+
+  linux_gtk3:
+    name: Linux GTK3
+    needs: prepare
+    if: needs.prepare.outputs.linux_gtk3 == 'true'
+    uses: ./.github/workflows/ccpp_ubuntu_gtk3_rc.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      stage_release: true
+      product: ${{ needs.prepare.outputs.product }}
+      release_version: ${{ needs.prepare.outputs.version }}
+
+  publish_linux_gtk3:
+    name: Linux GTK3
+    needs: [prepare, linux_gtk3]
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release_upload.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      release_version: ${{ needs.prepare.outputs.version }}
+      release_id: ${{ needs.prepare.outputs.release_id }}
+      product: ${{ needs.prepare.outputs.product }}
+      platform: linux-gtk3
+      artifact_id: ${{ needs.linux_gtk3.outputs.release_artifact_id }}
+
+  linux_gtk2:
+    name: Linux GTK2
+    needs: prepare
+    if: needs.prepare.outputs.linux_gtk2 == 'true'
+    uses: ./.github/workflows/ccpp_ubuntu_gtk2_rc.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      stage_release: true
+      product: ${{ needs.prepare.outputs.product }}
+      release_version: ${{ needs.prepare.outputs.version }}
+
+  publish_linux_gtk2:
+    name: Linux GTK2
+    needs: [prepare, linux_gtk2]
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release_upload.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+      release_version: ${{ needs.prepare.outputs.version }}
+      release_id: ${{ needs.prepare.outputs.release_id }}
+      product: ${{ needs.prepare.outputs.product }}
+      platform: linux-gtk2
+      artifact_id: ${{ needs.linux_gtk2.outputs.release_artifact_id }}
+
+  summary:
+    name: Release / summary
+    needs: [prepare, windows_signing, windows_build, windows_package, publish_windows,
+            macos_intel, publish_macos_intel, macos_arm, publish_macos_arm,
+            linux_gtk3, publish_linux_gtk3, linux_gtk2, publish_linux_gtk2]
+    if: ${{ always() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      # GitHub requires push access even for GET requests on a draft release.
+      # The verify command itself performs no writes.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check all assets and leave the release in draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+          PRODUCT: ${{ needs.prepare.outputs.product }}
+          RELEASE_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: >-
+          python .github/scripts/release.py verify --source-sha "$RELEASE_SHA"
+          --version "$RELEASE_VERSION" --product "$PRODUCT" --release-id "$RELEASE_ID"

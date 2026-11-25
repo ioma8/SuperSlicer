@@ -1,3 +1,7 @@
+///|/ Copyright (c) Prusa Research 2019 - 2023 Vojtěch Bubník @bubnikv, Lukáš Hejl @hejllukas, Tomáš Mészáros @tamasmeszaros
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #include "clipper/clipper_z.hpp"
 
 #include "libslic3r.h"
@@ -58,7 +62,7 @@ std::vector<float> contour_distance(const EdgeGrid::Grid &grid, const size_t idx
 				this->idx_point_start = aidx_point_start;
 				this->pt       = apt_start.cast<double>() + SCALED_EPSILON * dir;
 				dir *= radius;
-				this->pt_start = this->pt.cast<coord_t>();
+				this->pt_start = Point::round(this->pt);
 				// Trim the vector by the grid's bounding box.
 				const BoundingBox &bbox = this->grid.bbox();
 				double t = 1.;
@@ -73,7 +77,7 @@ std::vector<float> contour_distance(const EdgeGrid::Grid &grid, const size_t idx
 				this->dir      = dir;
 				if (t < 1.)
 					dir *= t;
-				this->pt_end   = (this->pt + dir).cast<coord_t>();
+				this->pt_end   = Point::round(this->pt + dir);
 				this->t_min    = 1.;
 				assert(this->grid.bbox().contains(this->pt_start) && this->grid.bbox().contains(this->pt_end));
 			}
@@ -104,7 +108,7 @@ std::vector<float> contour_distance(const EdgeGrid::Grid &grid, const size_t idx
 								double param_hi;
 								double param_end = resampled_point_parameters.back().curve_parameter;
 								{
-									const Slic3r::Points &ipts = *grid.contours()[it_contour_and_segment->first];
+									const EdgeGrid::Contour &contour = grid.contours()[it_contour_and_segment->first];
 									size_t ipt = it_contour_and_segment->second;
 									ResampledPoint key(ipt, false, 0.);
 									auto lower = [](const ResampledPoint& l, const ResampledPoint r) { return l.idx_src < r.idx_src || (l.idx_src == r.idx_src && int(l.interpolated) > int(r.interpolated)); };
@@ -112,7 +116,7 @@ std::vector<float> contour_distance(const EdgeGrid::Grid &grid, const size_t idx
 									assert(it != resampled_point_parameters.end() && it->idx_src == ipt && ! it->interpolated);
 									double t2 = cross2(dir, vptpt2) / denom;
 									assert(t2 > - EPSILON && t2 < 1. + EPSILON);
-									if (++ ipt == ipts.size())
+									if (contour.begin() + (++ ipt) == contour.end())
 										param_hi = t2 * dir2.norm();
 									else
 										param_hi = it->curve_parameter + t2 * dir2.norm();
@@ -251,14 +255,15 @@ std::vector<float> contour_distance2(const EdgeGrid::Grid &grid, const size_t id
 #endif
 		struct Visitor {
 			Visitor(const EdgeGrid::Grid &grid, const size_t idx_contour, const std::vector<ResampledPoint> &resampled_point_parameters, double dist_same_contour_accept, double dist_same_contour_reject) :
-				grid(grid), idx_contour(idx_contour), contour(*grid.contours()[idx_contour]), resampled_point_parameters(resampled_point_parameters), dist_same_contour_accept(dist_same_contour_accept), dist_same_contour_reject(dist_same_contour_reject) {}
+				grid(grid), idx_contour(idx_contour), contour(grid.contours()[idx_contour]), resampled_point_parameters(resampled_point_parameters), dist_same_contour_accept(dist_same_contour_accept), dist_same_contour_reject(dist_same_contour_reject) {}
 
 			void init(const Points &contour, const Point &apoint) {
-				this->idx_point = &apoint - contour.data();
-				this->point 	= apoint;
-				this->found     = false;
-				this->dir_inside = this->dir_inside_at_point(contour, this->idx_point);
-			}
+                this->idx_point  = &apoint - contour.data();
+                this->point      = apoint;
+                this->found      = false;
+                this->dir_inside = this->dir_inside_at_point(contour, this->idx_point);
+                this->distance   = std::numeric_limits<double>::max();
+            }
 
 			bool operator()(coord_t iy, coord_t ix) {
 				// Called with a row and colum of the grid cell, which is intersected by a line.
@@ -269,7 +274,7 @@ std::vector<float> contour_distance2(const EdgeGrid::Grid &grid, const size_t id
 				    const Vec2d   v  = (segment.second - segment.first).cast<double>();
 				    const Vec2d   va = (this->point - segment.first).cast<double>();
 				    const double  l2 = v.squaredNorm();  // avoid a sqrt
-				    const double  t  = (l2 == 0.0) ? 0. : clamp(0., 1., va.dot(v) / l2);
+				    const double  t  = (l2 == 0.0) ? 0. : std::clamp(va.dot(v) / l2, 0., 1.);
 				    // Closest point from this->point to the segment.
 				    const Vec2d   foot = segment.first.cast<double>() + t * v;
 					const Vec2d   bisector = foot - this->point.cast<double>();
@@ -282,15 +287,15 @@ std::vector<float> contour_distance2(const EdgeGrid::Grid &grid, const size_t id
 							double param_lo = resampled_point_parameters[this->idx_point].curve_parameter;
 							double param_hi;
 							double param_end = resampled_point_parameters.back().curve_parameter;
-							const Slic3r::Points &ipts = *grid.contours()[it_contour_and_segment->first];
-							const size_t		  ipt  = it_contour_and_segment->second;
+							const EdgeGrid::Contour &contour = grid.contours()[it_contour_and_segment->first];
+							const size_t		     ipt     = it_contour_and_segment->second;
 							{
 								ResampledPoint key(ipt, false, 0.);
 								auto lower = [](const ResampledPoint& l, const ResampledPoint r) { return l.idx_src < r.idx_src || (l.idx_src == r.idx_src && int(l.interpolated) > int(r.interpolated)); };
 								auto it = std::lower_bound(resampled_point_parameters.begin(), resampled_point_parameters.end(), key, lower);
 								assert(it != resampled_point_parameters.end() && it->idx_src == ipt && ! it->interpolated);
 								param_hi = t * sqrt(l2);
-								if (ipt + 1 < ipts.size())
+								if (contour.begin() + ipt + 1 < contour.end())
 									param_hi += it->curve_parameter;
 							}
 							if (param_lo > param_hi)
@@ -306,9 +311,9 @@ std::vector<float> contour_distance2(const EdgeGrid::Grid &grid, const size_t id
 								// Bulge is estimated by 0.6 of the circle circumference drawn around the bisector.
 								// Test whether the contour is convex or concave.
 								bool inside = 
-									(t == 0.) ? this->inside_corner(ipts, ipt, this->point) :
-									(t == 1.) ? this->inside_corner(ipts, ipt + 1 == ipts.size() ? 0 : ipt + 1, this->point) :
-									this->left_of_segment(ipts, ipt, this->point);
+									(t == 0.) ? this->inside_corner(contour, ipt, this->point) :
+									(t == 1.) ? this->inside_corner(contour, contour.segment_idx_next(ipt), this->point) :
+									this->left_of_segment(contour, ipt, this->point);
 								accept = inside && dist_along_contour > 0.6 * M_PI * dist;
 							}
 					    }
@@ -316,7 +321,7 @@ std::vector<float> contour_distance2(const EdgeGrid::Grid &grid, const size_t id
 					    	// Simple case: Just measure the shortest distance.
 							this->distance = dist;
 #ifdef CONTOUR_DISTANCE_DEBUG_SVG
-							this->closest_point = foot.cast<coord_t>();
+							this->closest_point = Point::round(foot);
 #endif /* CONTOUR_DISTANCE_DEBUG_SVG */
 							this->found    = true;
 					    }
@@ -328,7 +333,7 @@ std::vector<float> contour_distance2(const EdgeGrid::Grid &grid, const size_t id
 
 			const EdgeGrid::Grid 			   &grid;
 			const size_t 		  				idx_contour;
-			const Points					   &contour;
+			const EdgeGrid::Contour			   &contour;
 			const std::vector<ResampledPoint>  &resampled_point_parameters;
 			const double                        dist_same_contour_accept;
 			const double 						dist_same_contour_reject;
@@ -357,24 +362,28 @@ std::vector<float> contour_distance2(const EdgeGrid::Grid &grid, const size_t id
 				return Vec2d(- v.y(), v.x());
 			}
 
-			static bool inside_corner(const Slic3r::Points &contour, size_t i, const Point &pt_oposite) {
-				const Vec2d pt = pt_oposite.cast<double>();
-				size_t iprev = prev_idx_modulo(i, contour);
-				size_t inext = next_idx_modulo(i, contour);
-				Vec2d v1 = (contour[i] - contour[iprev]).cast<double>();
-				Vec2d v2 = (contour[inext] - contour[i]).cast<double>();
-				bool  left_of_v1 = cross2(v1, pt - contour[iprev].cast<double>()) > 0.;
-				bool  left_of_v2 = cross2(v2, pt - contour[i    ].cast<double>()) > 0.;
-				return cross2(v1, v2) > 0 ? 
-					left_of_v1 && left_of_v2 : // convex corner
-					left_of_v1 || left_of_v2;  // concave corner
-			}
-			static bool left_of_segment(const Slic3r::Points &contour, size_t i, const Point &pt_oposite) {
-				const Vec2d pt = pt_oposite.cast<double>();
-				size_t inext = next_idx_modulo(i, contour);
-				Vec2d v = (contour[inext] - contour[i]).cast<double>();
-				return cross2(v, pt - contour[i].cast<double>()) > 0.;
-			}
+            static bool inside_corner(const EdgeGrid::Contour &contour, size_t i, const Point &pt_oposite)
+            {
+                const Vec2d pt         = pt_oposite.cast<double>();
+                const Point &pt_prev   = contour.segment_prev(i);
+                const Point &pt_this   = contour.segment_start(i);
+                const Point &pt_next   = contour.segment_end(i);
+                Vec2d       v1         = (pt_this - pt_prev).cast<double>();
+                Vec2d       v2         = (pt_next - pt_this).cast<double>();
+                bool        left_of_v1 = cross2(v1, pt - pt_prev.cast<double>()) > 0.;
+                bool        left_of_v2 = cross2(v2, pt - pt_this.cast<double>()) > 0.;
+                return cross2(v1, v2) > 0 ? left_of_v1 && left_of_v2 : // convex corner
+                                            left_of_v1 || left_of_v2;                   // concave corner
+            }
+
+            static bool left_of_segment(const EdgeGrid::Contour &contour, size_t i, const Point &pt_oposite)
+            {
+                const Vec2d  pt      = pt_oposite.cast<double>();
+                const Point &pt_this = contour.segment_start(i);
+                const Point &pt_next = contour.segment_end(i);
+                Vec2d        v       = (pt_next - pt_this).cast<double>();
+                return cross2(v, pt - pt_this.cast<double>()) > 0.;
+            }
 		} visitor(grid, idx_contour, resampled_point_parameters, 0.5 * compensation * M_PI, search_radius);
 
 		out.reserve(contour.size());
@@ -427,7 +436,7 @@ Points resample_polygon(const Points &contour, double dist, std::vector<Resample
     		for (size_t i = 1; i < n; ++ i) {
 				double interpolation_parameter = double(i) / n;
     			Vec2d new_pt = pt_prev + v * interpolation_parameter;
-    			out.emplace_back(new_pt.cast<coord_t>());
+    			out.push_back(Point::round(new_pt));
 				resampled_point_parameters.emplace_back(idx_this, true, l_step);
 			}
     		out.emplace_back(pt);
@@ -440,6 +449,7 @@ Points resample_polygon(const Points &contour, double dist, std::vector<Resample
     return out;
 }
 
+#if 0
 static inline void smooth_compensation(std::vector<float> &compensation, float strength, size_t num_iterations)
 {
 	std::vector<float> out(compensation);
@@ -454,6 +464,7 @@ static inline void smooth_compensation(std::vector<float> &compensation, float s
 		out.swap(compensation);
 	}
 }
+#endif
 
 static inline void smooth_compensation_banded(const Points &contour, float band, std::vector<float> &compensation, float strength, size_t num_iterations)
 {
@@ -535,14 +546,14 @@ static bool validate_expoly_orientation(const ExPolygon &expoly)
 #endif /* NDEBUG */
 
 ExPolygon elephant_foot_compensation(const ExPolygon &input_expoly, double min_contour_width, const double compensation)
-{	
+{
 	assert(validate_expoly_orientation(input_expoly));
 
-	double scaled_compensation = scale_(compensation);
-    min_contour_width = scale_(min_contour_width);
-	double min_contour_width_compensated = min_contour_width + 2. * scaled_compensation;
+	coordf_t scaled_compensation = scale_d(compensation);
+	coordf_t scaled_min_contour_width = scale_d(min_contour_width);
+	coordf_t min_contour_width_compensated = scaled_min_contour_width + 2. * scaled_compensation;
 	// Make the search radius a bit larger for the averaging in contour_distance over a fan of rays to work.
-	double search_radius = min_contour_width_compensated + min_contour_width * 0.5;
+	coordf_t search_radius = min_contour_width_compensated + scaled_min_contour_width * 0.5;
 
 	BoundingBox bbox = get_extents(input_expoly.contour);
 	Point 		bbox_size = bbox.size();
@@ -577,12 +588,12 @@ ExPolygon elephant_foot_compensation(const ExPolygon &input_expoly, double min_c
 			for (float &d : dists) {
 	//			printf("Point %d, Distance: %lf\n", int(&d - dists.data()), unscale<double>(d));
 				// Convert contour width to available compensation distance.
-				if (d < min_contour_width)
+				if (d < scaled_min_contour_width)
 					d = 0.f;
 				else if (d > min_contour_width_compensated)
 					d = - float(scaled_compensation);
 				else
-					d = - (d - float(min_contour_width)) / 2.f;
+					d = - (d - float(scaled_min_contour_width)) / 2.f;
 				assert(d >= - float(scaled_compensation) && d <= 0.f);
 			}
 	//		smooth_compensation(dists, 0.4f, 10);
@@ -591,7 +602,8 @@ ExPolygon elephant_foot_compensation(const ExPolygon &input_expoly, double min_c
 		}
 
 		ExPolygons out_vec = variable_offset_inner_ex(resampled, deltas, 2.);
-		if (out_vec.size() == 1)
+		if (out_vec.size() == 1 && out_vec.front().holes.size() == resampled.holes.size())
+			// No contour of the original compensated expolygon was lost.
 			out = std::move(out_vec.front());
 		else {
 			// Something went wrong, don't compensate.
@@ -604,6 +616,7 @@ ExPolygon elephant_foot_compensation(const ExPolygon &input_expoly, double min_c
 					  { { out_vec },		{ "gray", "black", "blue", coord_t(scale_(0.02)), 0.5f, "black", coord_t(scale_(0.05)) } } });
 			}
 #endif /* TESTS_EXPORT_SVGS */
+			// It may be that the source expolygons contained non-manifold vertices, for which the variable offset may not produce the same number of contours or holes.
 			assert(out_vec.size() == 1);
 		}
 	}
@@ -615,7 +628,7 @@ ExPolygon elephant_foot_compensation(const ExPolygon &input_expoly, double min_c
 ExPolygon  elephant_foot_compensation(const ExPolygon  &input, const Flow &external_perimeter_flow, const double compensation)
 {
     // The contour shall be wide enough to apply the external perimeter plus compensation on both sides.
-    double min_contour_width = double(external_perimeter_flow.width + external_perimeter_flow.spacing());
+    double min_contour_width = double(external_perimeter_flow.width() + external_perimeter_flow.spacing());
     return elephant_foot_compensation(input, min_contour_width, compensation);
 }
 

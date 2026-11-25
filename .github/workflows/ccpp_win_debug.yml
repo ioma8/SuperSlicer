@@ -1,0 +1,119 @@
+name: C/C++ debug windows x64
+
+on:
+  push:
+    branches:
+      - debug_win
+
+permissions:
+  contents: read
+
+jobs:
+
+  build_dep:
+    runs-on: windows-2022
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ilammy/msvc-dev-cmd@v1
+    - name: dep cache
+      id: cache-action
+      uses: actions/cache@v4
+      with:
+        key: win-vs2022-x64-msvc-v2-${{ hashFiles('deps/CMakeLists.txt', 'deps/+*/**', 'cmake/modules/**', '.github/windows/Invoke-MsvcBuild.ps1') }}
+        path: deps/build/destdir
+    - if: steps.cache-action.outputs.cache-hit != 'true'
+      name: Build MSVC dependencies
+      shell: powershell
+      run: ./.github/windows/Invoke-MsvcBuild.ps1 -Target Dependencies
+
+  build:
+    runs-on: windows-2022
+    needs: build_dep
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ilammy/msvc-dev-cmd@v1
+    - name: update submodule profiles
+      working-directory: ./resources/profiles
+      run: git submodule update --init
+    - name: change date in version
+      shell: powershell
+      run: |
+        copy version.inc version.date.inc
+        (Get-Content version.date.inc) | Foreach-Object {$_ -replace "\+UNKNOWN", ("_" + [datetime]::Today.ToString("yyyy-MM-dd"))} | Set-Content version.date.inc
+    - name: dep cache
+      uses: actions/cache/restore@v4
+      with:
+        key: win-vs2022-x64-msvc-v2-${{ hashFiles('deps/CMakeLists.txt', 'deps/+*/**', 'cmake/modules/**', '.github/windows/Invoke-MsvcBuild.ps1') }}
+        path: deps/build/destdir
+        fail-on-cache-miss: true
+    - run: mkdir msgfmt_bin
+    - name: copy gettext
+      working-directory: ./msgfmt_bin
+      shell: powershell
+      run: '(new-object System.Net.WebClient).DownloadFile("https://github.com/supermerill/SuperSlicer_deps/releases/download/gettext/gettext-tools-static-0.18.1.1.zip", "gettext.zip")'
+    - name: unzip
+      working-directory: ./msgfmt_bin
+      shell: cmd
+      run: '"C:/Program Files/7-Zip/7z.exe" x gettext.zip'
+    - name: add msgfmt to path
+      shell: powershell
+      working-directory: msgfmt_bin
+      run: $PWD.Path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+    - name: Configure and build SuperSlicer
+      shell: powershell
+      run: ./.github/windows/Invoke-MsvcBuild.ps1 -Target Debug
+    - name: make .mo
+      working-directory: ./build
+      run: msbuild /m /P:Configuration=Debug gettext_po_to_mo.vcxproj
+    - name: make .pot
+      working-directory: ./build
+      run: msbuild /m /P:Configuration=Debug gettext_make_pot.vcxproj
+    - name: create OCCT wrapper
+      working-directory: ./build
+      run: msbuild /m /P:Configuration=Debug src\occt_wrapper\OCCTWrapper.vcxproj
+    - name: copy dll
+      working-directory: ./build
+      run: msbuild /m /P:Configuration=Debug src\slic3rDllsCopy.vcxproj
+    - name: create package directory
+      working-directory: ./build
+      shell: powershell
+      run: mkdir package
+    - name: copy from release
+      working-directory: ./build
+      shell: powershell
+      run: '(new-object System.Net.WebClient).DownloadFile("https://github.com/supermerill/SuperSlicer_deps/releases/download/1.8/Slic3r_win_build.zip", "Slic3r_win_build.zip")'
+    - name: unzip
+      working-directory: ./build
+      shell: cmd
+      run: '"C:/Program Files/7-Zip/7z.exe" x Slic3r_win_build.zip'
+    - name: copy missing dll content from old release
+      working-directory: ./build
+      shell: cmd
+      run: |
+        copy /Y "Slic3r_win_build\local-settings.bat" "package\${{ github.event.repository.name }}_local-settings.bat" || exit /b 1
+        xcopy /RCYIE Slic3r_win_build\mesa package\mesa\
+    - name: copy new resources
+      working-directory: ./build
+      shell: cmd
+      run: xcopy /RCYIE ..\resources package\resources
+    - name: copy profiles from registered github repositories
+      working-directory: ./build
+      shell: cmd
+      run: |
+        python ..\src\platform\download_vendor_bundles.py package/resources
+    - name: copy binaries and debug symbols
+      working-directory: ./build
+      shell: cmd
+      run: |
+        xcopy /RCYIE src\Debug\*.dll package\ || exit /b 1
+        xcopy /RCYIE src\Debug\*.exe package\ || exit /b 1
+        xcopy /RCYIE src\Debug\*.pdb package\ || exit /b 1
+    # The MSVC debug CRT is for developer machines and is not redistributable.
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: debug_${{ github.event.repository.name }}-win64
+        path: build/package/
+        if-no-files-found: error

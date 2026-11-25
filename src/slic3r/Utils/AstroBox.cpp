@@ -1,3 +1,9 @@
+///|/ Copyright (c) Prusa Research 2018 - 2023 Oleksandra Iushchenko @YuSanka, David Kocík @kocikdav, Vojtěch Bubník @bubnikv, Lukáš Matěna @lukasmatena, Vojtěch Král @vojtechkral
+///|/ Copyright (c) 2019 Spencer Owen @spuder
+///|/ Copyright (c) 2018 Martin Loidl @LoidlM
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #include "AstroBox.hpp"
 
 #include <algorithm>
@@ -14,6 +20,7 @@
 #include "libslic3r/PrintConfig.hpp"
 #include "slic3r/GUI/I18N.hpp"
 #include "slic3r/GUI/GUI.hpp"
+#include "slic3r/GUI/format.hpp"
 #include "Http.hpp"
 
 
@@ -63,10 +70,10 @@ bool AstroBox::test(wxString &msg) const
                     return;
                 }
 
-                const auto text = ptree.get_optional<std::string>("text");
+                const std::optional<std::string> text = to_std_opt_str(ptree.get_optional<std::string>("text"));
                 res = validate_version_text(text);
                 if (! res) {
-                    msg = GUI::from_u8((boost::format(_utf8(L("Mismatched type of print host: %s"))) % (text ? *text : "AstroBox")).str());
+                    msg = GUI::format_wxstr(_L("Mismatched type of print host: %s"), (text ? *text : "AstroBox"));
                 }
             }
             catch (const std::exception &) {
@@ -79,20 +86,15 @@ bool AstroBox::test(wxString &msg) const
     return res;
 }
 
-wxString AstroBox::get_test_ok_msg () const
-{
-    return _(L("Connection to AstroBox works correctly."));
-}
-
 wxString AstroBox::get_test_failed_msg (wxString &msg) const
 {
-    return GUI::from_u8((boost::format("%s: %s\n\n%s")
-        % _utf8(L("Could not connect to AstroBox"))
-        % std::string(msg.ToUTF8())
-        % _utf8(L("Note: AstroBox version at least 1.1.0 is required."))).str());
+    return GUI::format_wxstr("Could not connect to %s: %s\n\n%s"
+        , get_name()
+        , msg
+        , _L("Note: AstroBox version at least 1.1.0 is required."));
 }
 
-bool AstroBox::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, ErrorFn error_fn) const
+bool AstroBox::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, ErrorFn error_fn, InfoFn info_fn) const
 {
     const char *name = get_name();
 
@@ -115,11 +117,11 @@ bool AstroBox::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, Error
         % url
         % upload_filename.string()
         % upload_parent_path.string()
-        % upload_data.start_print;
+        % (upload_data.post_action == PrintHostPostUploadAction::StartPrint ? "true" : "false");
 
     auto http = Http::post(std::move(url));
     set_auth(http);
-    http.form_add("print", upload_data.start_print ? "true" : "false")
+    http.form_add("print", upload_data.post_action == PrintHostPostUploadAction::StartPrint ? "true" : "false")
         .form_add("path", upload_parent_path.string())      // XXX: slashes on windows ???
         .form_add_file("file", upload_data.source_path.string(), upload_filename.string())
         .on_complete([&](std::string body, unsigned status) {
@@ -143,7 +145,7 @@ bool AstroBox::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, Error
     return res;
 }
 
-bool AstroBox::validate_version_text(const boost::optional<std::string> &version_text) const
+bool AstroBox::validate_version_text(const std::optional<std::string> &version_text) const
 {
     return version_text ? boost::starts_with(*version_text, "AstroBox") : true;
 }

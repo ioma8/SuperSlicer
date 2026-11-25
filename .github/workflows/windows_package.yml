@@ -1,0 +1,307 @@
+name: Sign and assemble Windows package
+
+# Downloads the exact unsigned package produced by windows_build.yml in this run,
+# checks it against this checkout, then signs (if requested) and assembles the MSI. The
+# portable folder, the MSI and, for an RC release, the staged release files are uploaded
+# only after Test-InstallerPayload.ps1 shows they contain the same binaries.
+on:
+  workflow_call:
+    inputs:
+      artifact_id:
+        description: windows_build.yml artifact_id output from this workflow run
+        type: string
+        required: true
+      source_sha:
+        type: string
+        required: true
+      mode:
+        description: rc or nightly, as passed to windows_build.yml
+        type: string
+        required: true
+      signing:
+        description: 'none, test (nightly only, pinned test certificate) or production (rc only)'
+        type: string
+        default: none
+      stage_release:
+        description: Stage the two Windows release files for the draft publisher (production only)
+        type: boolean
+        default: false
+      product:
+        description: Release product name, required with stage_release
+        type: string
+        default: ''
+      release_version:
+        description: Full release version, required with stage_release
+        type: string
+        default: ''
+    secrets:
+      SIGNPATH_API_TOKEN:
+        required: false
+    outputs:
+      release_artifact_id:
+        description: ID of the staged release files (empty unless stage_release)
+        value: ${{ jobs.package.outputs.release_artifact_id }}
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ inputs.signing == 'none' && 'Package (unsigned)' || format('Sign ({0}) and package', inputs.signing) }}
+    runs-on: windows-2022
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      release_artifact_id: ${{ steps.release-artifact.outputs.artifact-id }}
+    env:
+      SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG || 'superslicer' }}
+      # Each mode uses only its own policy; a missing slug is an error, never the other policy.
+      SIGNPATH_SIGNING_POLICY_SLUG: ${{ inputs.signing == 'test' && vars.SIGNPATH_TEST_SIGNING_POLICY_SLUG || inputs.signing == 'production' && vars.SIGNPATH_SIGNING_POLICY_SLUG || '' }}
+      # Only the test mode accepts the pinned self-signed certificate; production needs normal trust.
+      SIGNPATH_TEST_CERTIFICATE_THUMBPRINT: ${{ inputs.signing == 'test' && vars.SIGNPATH_TEST_CERTIFICATE_THUMBPRINT || '' }}
+      ARTIFACT_PREFIX: ${{ inputs.mode == 'rc' && 'rc' || (inputs.signing == 'test' && 'test-signed_nightly' || 'nightly') }}
+    steps:
+    - name: Check inputs
+      shell: powershell
+      env:
+        ARTIFACT_ID: ${{ inputs.artifact_id }}
+        SOURCE_SHA: ${{ inputs.source_sha }}
+        BUILD_MODE: ${{ inputs.mode }}
+        SIGNING: ${{ inputs.signing }}
+        STAGE_RELEASE: ${{ inputs.stage_release }}
+        PRODUCT: ${{ inputs.product }}
+        RELEASE_VERSION: ${{ inputs.release_version }}
+        # The github context is the calling workflow's: it identifies who asks to sign.
+        EVENT_NAME: ${{ github.event_name }}
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        if ($env:ARTIFACT_ID -cnotmatch '^[1-9][0-9]*$') { throw 'artifact_id must be the numeric ID output by windows_build.yml' }
+        # Production only for a tag push through release_rc.yml; test only for a manual nightly.
+        $callers = @{ production = @('push', "$env:REPOSITORY/.github/workflows/release_rc.yml@refs/tags/")
+                      test = @('workflow_dispatch', "$env:REPOSITORY/.github/workflows/ccpp_win.yml@") }
+        if ($callers.ContainsKey($env:SIGNING) -and ($env:EVENT_NAME -cne $callers[$env:SIGNING][0] -or
+            -not $env:WORKFLOW_REF.StartsWith($callers[$env:SIGNING][1], [StringComparison]::Ordinal))) {
+          throw "Signing mode $env:SIGNING is not allowed for $env:EVENT_NAME from $env:WORKFLOW_REF"
+        }
+        if ($env:SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'source_sha must be a complete lowercase commit SHA' }
+        $allowed = @{ rc = @('none', 'production'); nightly = @('none', 'test') }
+        if (-not $allowed.ContainsKey($env:BUILD_MODE) -or $env:SIGNING -cnotin $allowed[$env:BUILD_MODE]) {
+          throw "Unsupported mode/signing combination: $env:BUILD_MODE/$env:SIGNING"
+        }
+        if ($env:STAGE_RELEASE -eq 'true') {
+          if ($env:SIGNING -ne 'production') { throw 'Release files require production signing' }
+          if ([string]::IsNullOrWhiteSpace($env:PRODUCT) -or [string]::IsNullOrWhiteSpace($env:RELEASE_VERSION)) {
+            throw 'Release files require the product and release version'
+          }
+        }
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.source_sha }}
+        persist-credentials: false
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: check signing configuration
+      if: inputs.signing != 'none'
+      shell: powershell
+      env:
+        SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        SIGNING: ${{ inputs.signing }}
+      run: |
+        $names = @('SIGNPATH_ORGANIZATION_ID', 'SIGNPATH_PROJECT_SLUG', 'SIGNPATH_SIGNING_POLICY_SLUG', 'SIGNPATH_API_TOKEN')
+        if ($env:SIGNING -eq 'test') { $names += 'SIGNPATH_TEST_CERTIFICATE_THUMBPRINT' }
+        foreach ($name in $names) {
+          if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+            throw "Missing $name. See .github/signpath/README.md."
+          }
+        }
+        if ($env:SIGNING -eq 'test' -and ($env:SIGNPATH_TEST_CERTIFICATE_THUMBPRINT -replace '\s', '') -notmatch '^[0-9a-fA-F]{40}$') {
+          throw 'SIGNPATH_TEST_CERTIFICATE_THUMBPRINT must be the SHA-1 thumbprint of the test certificate.'
+        }
+    - name: Download the unsigned package from this run
+      uses: actions/download-artifact@v4
+      with:
+        artifact-ids: ${{ inputs.artifact_id }}
+        merge-multiple: true
+        path: build
+    - name: Verify the package against this commit
+      shell: powershell
+      env:
+        SOURCE_SHA: ${{ inputs.source_sha }}
+        BUILD_MODE: ${{ inputs.mode }}
+        STAGE_RELEASE: ${{ inputs.stage_release }}
+        PRODUCT: ${{ inputs.product }}
+        RELEASE_VERSION: ${{ inputs.release_version }}
+      run: |
+        $arguments = @('--mode', $env:BUILD_MODE, '--source-sha', $env:SOURCE_SHA)
+        if ($env:STAGE_RELEASE -eq 'true') { $arguments += @('--product', $env:PRODUCT, '--release-version', $env:RELEASE_VERSION) }
+        python -B .github/scripts/windows_package.py verify @arguments
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    # ---- own binaries: the explicit allowlist, also checked when not signing ----
+    - name: collect own binaries to sign
+      id: signing-input
+      shell: powershell
+      run: |
+        ./.github/signpath/Prepare-Binaries.ps1 -SourceDirectory build/package -OutputDirectory build/sign-input -ExpectedProductVersion $env:BINARY_VERSION
+    - name: upload unsigned binaries
+      id: upload-unsigned-binaries
+      if: inputs.signing != 'none'
+      uses: actions/upload-artifact@v4
+      with:
+        name: unsigned-binaries-${{ github.run_attempt }}
+        path: build/sign-input/
+        if-no-files-found: error
+        retention-days: 1
+    - name: sign binaries
+      if: inputs.signing != 'none'
+      uses: signpath/github-action-submit-signing-request@v3
+      with:
+        api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+        organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+        project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+        signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
+        artifact-configuration-slug: windows-binaries
+        github-artifact-id: ${{ steps.upload-unsigned-binaries.outputs.artifact-id }}
+        wait-for-completion: true
+        wait-for-completion-timeout-in-seconds: 1800
+        output-artifact-directory: build/signed-binaries
+        parameters: |
+          version: ${{ toJSON(steps.signing-input.outputs.product-version) }}
+    - name: verify and copy signed binaries into package
+      if: inputs.signing != 'none'
+      shell: powershell
+      run: |
+        ./.github/signpath/Update-SignedArtifacts.ps1 -UnsignedDirectory build/sign-input -SignedDirectory build/signed-binaries -DestinationDirectory build/package -TestCertificateThumbprint $env:SIGNPATH_TEST_CERTIFICATE_THUMBPRINT
+
+    # ---- MSI from the trusted template of this checkout ----
+    - name: Install WiX Toolset 3.14.1
+      shell: powershell
+      run: |
+        # windows-2022 images ship this Chocolatey package; install it only where it is missing.
+        $bin = Join-Path ${env:ProgramFiles(x86)} 'WiX Toolset v3.14\bin'
+        if (-not (Test-Path -LiteralPath "$bin\light.exe")) {
+          choco install wixtoolset --version=3.14.1.20250415 -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        }
+        # The template and heat/candle/light are WiX 3; 3.14.1 completes its security fix.
+        $banner = @(& "$bin\light.exe" -?)[0]
+        if ($banner -notmatch 'version (3\.\d+\.\d+\.\d+)' -or [version]$Matches[1] -lt [version]'3.14.1.0') {
+          throw "WiX 3 at least 3.14.1 is required: $banner"
+        }
+        "WIX_BIN=$bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+    - name: Prepare license file for MSI
+      shell: powershell
+      working-directory: ./build
+      run: |
+        # Convert LICENSE to RTF format for WiX installer
+        $licenseContent = Get-Content ..\LICENSE -Raw
+        $rtfContent = "{\rtf1\ansi\deff0 {\fonttbl {\f0 Times New Roman;}}{\f0\fs20 " + $licenseContent.Replace('\', '\\').Replace("`n", "\par ") + "}}"
+        $rtfContent | Out-File -FilePath "package\LICENSE.rtf" -Encoding ASCII
+    - name: Render the installer source
+      shell: powershell
+      run: python -B .github/scripts/windows_package.py wxs --output build/winInstaller.wxs
+    - name: Harvest files for MSI
+      shell: cmd
+      working-directory: ./build
+      run: |
+        "%WIX_BIN%\heat.exe" dir package -dr INSTALLFOLDER -cg Package -gg -sreg -srd -var var.SourceDir -out files.wxs -sfrag
+    - name: Build MSI installer
+      shell: cmd
+      working-directory: ./build
+      run: |
+        "%WIX_BIN%\candle.exe" -dSourceDir="package" -dInstallerVersion="%InstallerVersion%" -dReleaseSuffix="%ReleaseSuffix%" winInstaller.wxs files.wxs || exit /b 1
+        "%WIX_BIN%\light.exe" -b package -ext WixUIExtension winInstaller.wixobj files.wixobj -o "%MSI_FILE_NAME%" -sw1076
+
+    # ---- installer signature ----
+    - name: collect unsigned msi
+      if: inputs.signing != 'none'
+      shell: powershell
+      run: |
+        New-Item -ItemType Directory -Path build/sign-msi-input | Out-Null
+        Copy-Item -LiteralPath "build/$env:MSI_FILE_NAME" -Destination build/sign-msi-input -ErrorAction Stop
+    - name: upload unsigned msi
+      id: upload-unsigned-msi
+      if: inputs.signing != 'none'
+      uses: actions/upload-artifact@v4
+      with:
+        name: unsigned-msi-${{ github.run_attempt }}
+        path: build/sign-msi-input/
+        if-no-files-found: error
+        retention-days: 1
+    - name: sign msi
+      if: inputs.signing != 'none'
+      uses: signpath/github-action-submit-signing-request@v3
+      with:
+        api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+        organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+        project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+        signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
+        artifact-configuration-slug: windows-msi
+        github-artifact-id: ${{ steps.upload-unsigned-msi.outputs.artifact-id }}
+        wait-for-completion: true
+        wait-for-completion-timeout-in-seconds: 1800
+        output-artifact-directory: build/signed-msi
+    - name: verify and replace signed msi
+      if: inputs.signing != 'none'
+      shell: powershell
+      run: |
+        ./.github/signpath/Update-SignedArtifacts.ps1 -UnsignedDirectory build/sign-msi-input -SignedDirectory build/signed-msi -DestinationDirectory build -TestCertificateThumbprint $env:SIGNPATH_TEST_CERTIFICATE_THUMBPRINT
+
+    # ---- nothing is uploaded before the MSI (and the RC release files) are checked ----
+    - name: Check the installer contents
+      shell: powershell
+      run: |
+        ./.github/windows/Test-InstallerPayload.ps1 -MsiPath "build/$env:MSI_FILE_NAME" -PackageDirectory build/package `
+          -ExpectedVersion $env:InstallerVersion -Launcher $env:LAUNCHER -WorkDirectory "$env:RUNNER_TEMP/msi-payload"
+    - name: Stage signed release files and integrity manifest
+      if: inputs.stage_release
+      shell: powershell
+      env:
+        RELEASE_SHA: ${{ inputs.source_sha }}
+        RELEASE_VERSION: ${{ inputs.release_version }}
+        PRODUCT: ${{ inputs.product }}
+      run: >-
+        python .github/scripts/release.py stage --platform windows
+        --source-sha "$env:RELEASE_SHA" --version "$env:RELEASE_VERSION" --product "$env:PRODUCT"
+    - name: Check the release files
+      if: inputs.stage_release
+      shell: powershell
+      run: |
+        $zip = @(Get-ChildItem -LiteralPath release-assets -Filter *.zip)
+        $msi = @(Get-ChildItem -LiteralPath release-assets -Filter *.msi)
+        if ($zip.Count -ne 1 -or $msi.Count -ne 1) { throw 'Expected one portable ZIP and one MSI in the release files' }
+        # The staged MSI must be the one checked above; the ZIP is checked on its own.
+        if ((Get-FileHash -LiteralPath $msi[0].FullName).Hash -cne (Get-FileHash -LiteralPath "build/$env:MSI_FILE_NAME").Hash) {
+          throw 'The staged MSI is not the checked installer'
+        }
+        ./.github/windows/Test-InstallerPayload.ps1 -ZipPath $zip[0].FullName -PackageDirectory build/package `
+          -Launcher $env:LAUNCHER -WorkDirectory "$env:RUNNER_TEMP/release-payload"
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_PREFIX }}_${{ github.event.repository.name }}-win64
+        # LICENSE.rtf only exists for WiX; the portable artifact keeps its previous content.
+        path: |
+          build/package/
+          !build/package/LICENSE.rtf
+        if-no-files-found: error
+        overwrite: true
+    - name: Upload MSI artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_PREFIX }}_${{ github.event.repository.name }}-win64.msi
+        path: build/${{ env.MSI_FILE_NAME }}
+        if-no-files-found: error
+        overwrite: true
+    - name: Upload exact files for the draft publisher
+      id: release-artifact
+      if: inputs.stage_release
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-windows-${{ github.run_attempt }}
+        path: release-assets/
+        if-no-files-found: error

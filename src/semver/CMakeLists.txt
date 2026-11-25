@@ -1,5 +1,5 @@
+cmake_minimum_required(VERSION 3.5)
 project(semver)
-cmake_minimum_required(VERSION 2.6)
 
 add_library(semver STATIC
     semver.c

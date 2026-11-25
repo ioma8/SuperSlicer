@@ -1,9 +1,12 @@
+///|/ Copyright (c) Prusa Research 2018 - 2022 Lukáš Matěna @lukasmatena, Vojtěch Bubník @bubnikv, David Kocík @kocikdav, Vojtěch Král @vojtechkral
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #include "Version.hpp"
 
 #include <cctype>
 
-#include <boost/algorithm/string/predicate.hpp>
-#include <boost/algorithm/string/trim.hpp>
+#include <boost/filesystem/operations.hpp>
 #include <boost/nowide/fstream.hpp>
 
 #include "libslic3r/libslic3r.h"
@@ -70,80 +73,7 @@ bool Version::is_current_slic3r_downgrade() const
 {
 	return Slic3r::SEMVER < min_slic3r_version;
 }
-#if 0
-//TODO: This test should be moved to a unit test, once we have C++ unit tests in place.
-static int version_test()
-{
-	Version v;
-	v.config_version 	 = *Semver::parse("1.1.2");
-	v.min_slic3r_version = *Semver::parse("1.38.0");
-	v.max_slic3r_version = Semver::inf();
-	assert(v.is_slic3r_supported(*Semver::parse("1.38.0")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.38.0-alpha")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.37.0-alpha")));
-	// Test the prerelease status.
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha1")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha1")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-beta")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-beta1")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-beta1")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-rc2")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0")));
-	v.config_version 	 = *Semver::parse("1.1.2-alpha");
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha1")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0-beta")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0-beta1")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0-beta1")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0-rc2")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0")));
-	v.config_version 	 = *Semver::parse("1.1.2-alpha1");
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha1")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0-beta")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0-beta1")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0-beta1")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0-rc2")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0")));
-	v.config_version 	 = *Semver::parse("1.1.2-beta");
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha1")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-beta")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-beta1")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-beta1")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0-rc")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0-rc2")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0")));
-	v.config_version 	 = *Semver::parse("1.1.2-rc");
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha1")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-beta")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-beta1")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-beta1")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-rc")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-rc2")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0")));
-	v.config_version 	 = *Semver::parse("1.1.2-rc2");
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-alpha1")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-beta")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-beta1")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-beta1")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-rc")));
-	assert(v.is_slic3r_supported(*Semver::parse("1.39.0-rc2")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.39.0")));
-	// Test the upper boundary.
-	v.config_version 	 = *Semver::parse("1.1.2");
-	v.max_slic3r_version = *Semver::parse("1.39.3-beta1");
-	assert(v.is_slic3r_supported(*Semver::parse("1.38.0")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.38.0-alpha")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.38.0-alpha1")));
-	assert(! v.is_slic3r_supported(*Semver::parse("1.37.0-alpha")));
-	return 0;
-}
-static int version_test_run = version_test();
-#endif
+
 
 inline char* left_trim(char *c)
 {
@@ -238,7 +168,7 @@ size_t Index::load(const boost::filesystem::path &path)
 		if (key_value_pair)
 			value = left_trim(value + 1);
 		*key_end = 0;
-    	boost::optional<Semver> semver;
+    	std::optional<Semver> semver;
         if (maybe_semver)
     		semver = Semver::parse(key);
         if (key_value_pair) {
@@ -325,7 +255,7 @@ std::vector<Index> Index::load_db()
         }
 
     if (! errors_cummulative.empty())
-        throw std::runtime_error(errors_cummulative);
+        throw Slic3r::RuntimeError(errors_cummulative);
     return index_db;
 }
 

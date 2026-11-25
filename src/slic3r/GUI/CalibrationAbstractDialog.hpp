@@ -5,6 +5,7 @@
 #include <map>
 #include <vector>
 
+#include "Jobs/ProgressIndicator.hpp"
 #include "GUI_App.hpp"
 #include "GUI_Utils.hpp"
 #include "MainFrame.hpp"
@@ -24,11 +25,11 @@ public:
 private:
     wxPanel* create_header(wxWindow* parent, const wxFont& bold_font);
 protected:
-    void create(std::string html_path, wxSize dialogsize = wxSize(850, 550));
+    void create(boost::filesystem::path html_path, std::string html_name, wxSize dialogsize = wxSize(850, 550), bool include_close_button = false);
     virtual void create_buttons(wxStdDialogButtonSizer*) = 0;
     void on_dpi_changed(const wxRect& suggested_rect) override;
     void close_me(wxCommandEvent& event_args);
-    ModelObject* add_part(ModelObject* model_object, std::string input_file, Vec3d move, Vec3d scale = Vec3d{ 1,1,1 });
+    void add_part(ModelObject* model_object, std::string input_file, Vec3d move, Vec3d scale = Vec3d{ 1,1,1 }, bool rotate = true);
 
     wxHtmlWindow* html_viewer;
     MainFrame* main_frame;
@@ -41,11 +42,23 @@ class HtmlDialog : public CalibrationAbstractDialog
 {
 
 public:
-    HtmlDialog(GUI_App* app, MainFrame* mainframe, std::string title, std::string html_path) : CalibrationAbstractDialog(app, mainframe, title) { create(html_path); }
+    HtmlDialog(GUI_App* app, MainFrame* mainframe, std::string title, std::string html_path, std::string html_name) : CalibrationAbstractDialog(app, mainframe, title) { create(html_path, html_name); }
     virtual ~HtmlDialog() {}
 protected:
     void create_buttons(wxStdDialogButtonSizer* sizer) override {}
 
+};
+
+class ProgressIndicatorStub : public ProgressIndicator {
+public:
+
+    virtual ~ProgressIndicatorStub() override = default;
+
+    virtual void set_range(int range) override {}
+    virtual void set_cancel_callback(CancelFn = CancelFn()) override {}
+    virtual void set_progress(int pr) override {}
+    virtual void set_status_text(const char*) override {}
+    virtual int  get_range() const override { return 0; }
 };
 
 } // namespace GUI

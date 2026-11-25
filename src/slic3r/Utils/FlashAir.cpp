@@ -1,3 +1,9 @@
+///|/ Copyright (c) Prusa Research 2019 - 2023 Oleksandra Iushchenko @YuSanka, David Kocík @kocikdav, Lukáš Matěna @lukasmatena, Vojtěch Bubník @bubnikv, Enrico Turri @enricoturri1966
+///|/ Copyright (c) 2020 vintagepc
+///|/ Copyright (c) 2019 Stephan Reichhelm @stephanr
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #include "FlashAir.hpp"
 
 #include <algorithm>
@@ -19,6 +25,7 @@
 #include "slic3r/GUI/GUI.hpp"
 #include "slic3r/GUI/I18N.hpp"
 #include "slic3r/GUI/MsgDialog.hpp"
+#include "slic3r/GUI/format.hpp"
 #include "Http.hpp"
 
 namespace fs = boost::filesystem;
@@ -50,7 +57,7 @@ bool FlashAir::test(wxString &msg) const
 			res = false;
 			msg = format_error(body, error, status);
 		})
-		.on_complete([&, this](std::string body, unsigned) {
+        .on_complete([&](std::string body, unsigned) {
 			BOOST_LOG_TRIVIAL(debug) << boost::format("%1%: Got upload enabled: %2%") % name % body;
 
 			res = boost::starts_with(body, "1");
@@ -63,20 +70,15 @@ bool FlashAir::test(wxString &msg) const
 	return res;
 }
 
-wxString FlashAir::get_test_ok_msg () const
-{
-	return _(L("Connection to FlashAir works correctly and upload is enabled."));
-}
-
 wxString FlashAir::get_test_failed_msg (wxString &msg) const
 {
-    return GUI::from_u8((boost::format("%s: %s")
-                    % _utf8(L("Could not connect to FlashAir"))
-                    % std::string(msg.ToUTF8())
-                    % _utf8(L("Note: FlashAir with firmware 2.00.02 or newer and activated upload function is required."))).str());
+    return GUI::format_wxstr("Could not connect to %s: %s\n%s"
+                    , get_name()
+                    , msg
+                    , _u8L("Note: FlashAir with firmware 2.00.02 or newer and activated upload function is required."));
 }
 
-bool FlashAir::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, ErrorFn error_fn) const
+bool FlashAir::upload(PrintHostUpload upload_data, ProgressFn prorgess_fn, ErrorFn error_fn, InfoFn info_fn) const
 {
 	const char *name = get_name();
 
@@ -181,8 +183,6 @@ std::string FlashAir::timestamp_str() const
 {
 	auto t = std::time(nullptr);
 	auto tm = *std::localtime(&t);
-
-	const char *name = get_name();
 
 	unsigned long fattime = ((tm.tm_year - 80) << 25) | 
 							((tm.tm_mon + 1) << 21) |

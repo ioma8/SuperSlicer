@@ -102,7 +102,28 @@ may be provided to tell this module where to look.
 
 #]=======================================================================]
 
-cmake_minimum_required(VERSION 3.3)
+# If an explicit openvdb module path was specified, that will be used
+if (OPENVDB_FIND_MODULE_PATH)
+  set(_module_path_bak ${CMAKE_MODULE_PATH})
+  set(CMAKE_MODULE_PATH ${OPENVDB_FIND_MODULE_PATH})
+  find_package(
+    OpenVDB ${OpenVDB_FIND_VERSION} QUIET
+    COMPONENTS
+      ${OpenVDB_FIND_COMPONENTS}
+  )
+
+  set(CMAKE_MODULE_PATH ${_module_path_bak})
+  if (OpenVDB_FOUND)
+    return()
+  endif ()
+
+  if (NOT OpenVDB_FIND_QUIETLY)
+    message(STATUS "Using bundled find module for OpenVDB")
+  endif ()
+endif ()
+# ###########################################################################
+
+cmake_minimum_required(VERSION 3.5)
 # Monitoring <PackageName>_ROOT variables
 if(POLICY CMP0074)
   cmake_policy(SET CMP0074 NEW)
@@ -234,7 +255,7 @@ foreach(COMPONENT ${OpenVDB_FIND_COMPONENTS})
 
   if (_is_multi)
     list(APPEND OpenVDB_LIB_COMPONENTS ${OpenVDB_${COMPONENT}_LIBRARY_RELEASE})
-    if (MSVC OR OpenVDB_${COMPONENT}_LIBRARY_DEBUG)
+    if (OpenVDB_${COMPONENT}_LIBRARY_DEBUG)
       list(APPEND OpenVDB_LIB_COMPONENTS ${OpenVDB_${COMPONENT}_LIBRARY_DEBUG})
     endif ()
 
@@ -326,25 +347,6 @@ macro(just_fail msg)
   return()
 endmacro()
 
-find_package(IlmBase QUIET COMPONENTS Half)
-if(NOT IlmBase_FOUND)
-  pkg_check_modules(IlmBase QUIET IlmBase)
-endif()
-if (IlmBase_FOUND AND NOT TARGET IlmBase::Half)
-  message(STATUS "Falling back to IlmBase found by pkg-config...")
-
-  find_library(IlmHalf_LIBRARY NAMES Half)
-  if(IlmHalf_LIBRARY-NOTFOUND OR NOT IlmBase_INCLUDE_DIRS)
-    just_fail("IlmBase::Half can not be found!")
-  endif()
-  
-  add_library(IlmBase::Half UNKNOWN IMPORTED)
-  set_target_properties(IlmBase::Half PROPERTIES
-    IMPORTED_LOCATION "${IlmHalf_LIBRARY}"
-    INTERFACE_INCLUDE_DIRECTORIES "${IlmBase_INCLUDE_DIRS}")
-elseif(NOT IlmBase_FOUND)
-  just_fail("IlmBase::Half can not be found!")
-endif()
 find_package(TBB ${_quiet} ${_required} COMPONENTS tbb)
 find_package(ZLIB ${_quiet} ${_required})
 find_package(Boost ${_quiet} ${_required} COMPONENTS iostreams system )
@@ -450,7 +452,6 @@ endif()
 set(_OPENVDB_VISIBLE_DEPENDENCIES
   Boost::iostreams
   Boost::system
-  IlmBase::Half
 )
 
 set(_OPENVDB_DEFINITIONS)

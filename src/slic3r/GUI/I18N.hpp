@@ -1,7 +1,10 @@
+///|/ Copyright (c) Prusa Research 2018 - 2023 Oleksandra Iushchenko @YuSanka, Vojtěch Bubník @bubnikv, Vojtěch Král @vojtechkral
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #ifndef _
 #define _(s)    	Slic3r::GUI::I18N::translate((s))
 #define _L(s)    	Slic3r::GUI::I18N::translate((s))
-#define _utf8(s)    Slic3r::GUI::I18N::translate_utf8((s))
 #define _u8L(s)     Slic3r::GUI::I18N::translate_utf8((s))
 #endif /* _ */
 
@@ -12,7 +15,7 @@
 
 #ifndef L
 // !!! If you needed to translate some wxString,
-// !!! please use _(L(string))
+// !!! please use _L(string)
 // !!! _() - is a standard wxWidgets macro to translate
 // !!! L() is used only for marking localizable string 
 // !!! It will be used in "xgettext" to create a Locating Message Catalog.
@@ -22,12 +25,6 @@
 #ifndef L_CONTEXT
 #define L_CONTEXT(s, context) s
 #endif /* L */
-
-#ifndef _CHB
-//! macro used to localization, return wxScopedCharBuffer
-//! With wxConvUTF8 explicitly specify that the source string is already in UTF-8 encoding
-#define _CHB(s) wxGetTranslation(wxString(s, wxConvUTF8)).utf8_str()
-#endif /* _CHB */
 
 #ifndef slic3r_GUI_I18N_hpp_
 #define slic3r_GUI_I18N_hpp_
@@ -91,7 +88,8 @@ wxString	L_str(const std::string &str);
 
 // Macro to function both as a marker for xgettext and to actually perform the translation.
 #ifndef _L_PLURAL
-#define _L_PLURAL(s, plural, n) Slic3r::GUI::I18N::translate(s, plural, n)
+//#define _L_PLURAL(s, plural, n) Slic3r::GUI::I18N::translate(s, plural, n) //doesn't want to compile
+#define _L_PLURAL(s, plural, n) Slic3r::GUI::I18N::translate((s))
 #endif /* L */
 
 #endif /* slic3r_GUI_I18N_hpp_ */

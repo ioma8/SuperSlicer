@@ -1,10 +1,14 @@
+///|/ Copyright (c) Prusa Research 2018 - 2020 Lukáš Matěna @lukasmatena, David Kocík @kocikdav, Vojtěch Bubník @bubnikv, Vojtěch Král @vojtechkral
+///|/
+///|/ PrusaSlicer is released under the terms of the AGPLv3 or higher
+///|/
 #ifndef slic3r_GUI_ConfigIndex_
 #define slic3r_GUI_ConfigIndex_
 
 #include <string>
 #include <vector>
 
-#include <boost/filesystem.hpp>
+#include <boost/filesystem/path.hpp>
 
 #include "libslic3r/FileParserError.hpp"
 #include "libslic3r/Semver.hpp"
@@ -54,7 +58,7 @@ struct Version
 class Index
 {
 public:
-	typedef std::vector<Version>::const_iterator const_iterator;
+    typedef std::vector<Version>::const_iterator const_iterator;
 	// Read a config index file in the simple format described in the Index class comment.
 	// Throws Slic3r::file_parser_error and the standard std file access exceptions.
 	size_t						load(const boost::filesystem::path &path);

@@ -1,12 +1,12 @@
 #include "Mouse3DController.hpp"
 
-#include <stdint.h>
+#include <array>
+#include <cstdint>
+#include <cstdio>
+
 #include <dlfcn.h>
 
-#include <array>
-
 #include <boost/log/trivial.hpp>
-#include <cstdio>
 
 
 static Slic3r::GUI::Mouse3DController* mouse_3d_controller = nullptr;
@@ -204,7 +204,7 @@ void Mouse3DController::init()
       //If no packets are recieved the name might be different - check cmake. If debugging try commenting
       // set_target_properties(PrusaSlicer PROPERTIES OUTPUT_NAME "prusa-slicer")
       clientID = RegisterConnexionClient(
-          0, "\013PrusaSlicer", kConnexionClientModeTakeOver, kConnexionMaskAxis);
+          0, "\013" SLIC3R_APP_CMD, kConnexionClientModeTakeOver, kConnexionMaskAxis);
         BOOST_LOG_TRIVIAL(info) << "3dx mac handler registered";
     }
   }
